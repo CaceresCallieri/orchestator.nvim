@@ -243,20 +243,7 @@ function M.setup()
 		end,
 	})
 
-	-- Global keybindings to toggle the floating editor
-	vim.keymap.set("n", "<leader>ap", M.toggle, {
-		noremap = true,
-		silent = true,
-		desc = "Toggle prompt editor",
-	})
-
-	vim.keymap.set({ "n", "i" }, "<C-S-Space>", M.toggle, {
-		noremap = true,
-		silent = true,
-		desc = "Toggle prompt editor",
-	})
-
-	-- Create user command for manual access
+	-- Create user commands (keybindings should be set by user in their config)
 	vim.api.nvim_create_user_command("PromptToggle", M.toggle, {
 		desc = "Toggle prompt editor",
 	})

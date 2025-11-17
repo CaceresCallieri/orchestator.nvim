@@ -23,8 +23,8 @@ For local development:
   name = "prompt-editor.nvim",
   dev = true,
   keys = {
-    { "<leader>ap", desc = "Toggle prompt editor" },
-    { "<C-S-Space>", mode = { "n", "i" }, desc = "Toggle prompt editor" },
+    { "<leader>ap", "<cmd>PromptToggle<cr>", desc = "Toggle prompt editor" },
+    { "<C-S-Space>", "<cmd>PromptToggle<cr>", mode = { "n", "i" }, desc = "Toggle prompt editor" },
   },
 }
 ```
@@ -35,15 +35,17 @@ For installation from GitHub (once published):
 {
   "yourusername/prompt-editor.nvim",
   keys = {
-    { "<leader>ap", desc = "Toggle prompt editor" },
-    { "<C-S-Space>", mode = { "n", "i" }, desc = "Toggle prompt editor" },
+    { "<leader>ap", "<cmd>PromptToggle<cr>", desc = "Toggle prompt editor" },
+    { "<C-S-Space>", "<cmd>PromptToggle<cr>", mode = { "n", "i" }, desc = "Toggle prompt editor" },
   },
 }
 ```
 
 ### Configuration
 
-No configuration needed - works out of the box! The plugin automatically sets up when loaded.
+**No configuration required!** The plugin provides commands that you can bind to any keys you prefer.
+
+The keybindings shown above are **recommended defaults** - feel free to customize them to your preference.
 
 If you're using lazy.nvim with local dev plugins, ensure your `dev.path` is configured:
 
@@ -59,7 +61,16 @@ require("lazy").setup("your.plugins", {
 
 ## Usage
 
-### Keybindings
+### Commands
+
+The plugin provides the following commands:
+
+- `:PromptToggle` - Toggle the floating prompt editor
+- `:PromptSend` - Send the current prompt to a visible terminal
+
+### Recommended Keybindings
+
+If you use the recommended keybindings from the installation example:
 
 **Toggle Prompt Editor:**
 - `<leader>ap` (Normal mode)
@@ -67,11 +78,6 @@ require("lazy").setup("your.plugins", {
 
 **Send Prompt to Terminal:**
 - `<leader><CR>` (Normal and Insert mode, when inside prompt editor)
-
-### Commands
-
-- `:PromptToggle` - Toggle the floating prompt editor
-- `:PromptSend` - Send the current prompt to a visible terminal
 
 ### Workflow
 
