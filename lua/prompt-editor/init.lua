@@ -1,6 +1,6 @@
 -- Prompt Editor Module
--- Provides a toggle-able floating window for writing prompts to send to terminal
--- Usage: <leader>ap to toggle editor, <leader><CR> to send prompt to visible terminal
+-- Provides a toggle-able floating window for writing prompts to send to Claude Code
+-- Usage: <leader>ap to toggle editor, <leader><CR> to send prompt to Claude terminal
 
 local M = {}
 
@@ -151,62 +151,136 @@ function M.toggle()
 	end
 end
 
--- Find currently visible terminal window
-local function find_visible_terminal()
-	-- Iterate through all windows
-	for _, win in ipairs(vim.api.nvim_list_wins()) do
-		local buf = vim.api.nvim_win_get_buf(win)
+--- Get Claude's working directory from /proc
+--- Returns nil if not a Claude terminal or Claude not found
+--- @param shell_pid number The shell's PID (from terminal_job_pid)
+--- @return string|nil cwd The working directory, or nil if not found
+local function get_claude_cwd(shell_pid)
+	-- Validate PID is numeric
+	if type(shell_pid) ~= "number" or shell_pid <= 0 then
+		return nil
+	end
 
-		-- Check if this buffer is a terminal
-		if vim.bo[buf].buftype == "terminal" then
-			-- Check if it has a valid job ID
+	-- Find Claude process among children (single pgrep call with -a for command args)
+	local pgrep_result = vim.fn.system("pgrep -P " .. shell_pid .. " -a 2>/dev/null")
+
+	-- Check if any child process contains "claude" and extract its PID
+	local claude_pid = pgrep_result:match("(%d+)%s+.*claude")
+
+	if not claude_pid then
+		return nil -- Not a Claude terminal
+	end
+
+	-- Read working directory from /proc
+	local cwd = vim.fn.system("readlink /proc/" .. claude_pid .. "/cwd 2>/dev/null")
+	cwd = cwd:gsub("%s+$", "") -- Trim trailing whitespace/newline
+
+	if cwd == "" then
+		return nil
+	end
+
+	return cwd
+end
+
+--- Find all Claude Code terminal buffers in current project
+--- @return table[] Array of {win, buf, job_id, name} for each Claude terminal
+local function find_claude_terminals()
+	local terminals = {}
+	local nvim_cwd = vim.fn.getcwd()
+
+	for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+		if vim.api.nvim_buf_is_valid(buf) and vim.bo[buf].buftype == "terminal" then
 			local job_id = vim.b[buf].terminal_job_id
-			if job_id then
-				return win, buf, job_id
+			local pid = vim.b[buf].terminal_job_pid
+
+			if job_id and pid then
+				-- Single call - combines Claude detection + cwd retrieval
+				local claude_cwd = get_claude_cwd(pid)
+
+				if claude_cwd and claude_cwd == nvim_cwd then
+					-- Find window displaying this buffer
+					local win = nil
+					for _, w in ipairs(vim.api.nvim_list_wins()) do
+						if vim.api.nvim_win_get_buf(w) == buf then
+							win = w
+							break
+						end
+					end
+
+					table.insert(terminals, {
+						win = win,
+						buf = buf,
+						job_id = job_id,
+						name = "Claude",
+					})
+				end
 			end
 		end
 	end
 
-	return nil, nil, nil
+	return terminals
 end
 
--- Send prompt to terminal
+--- Show selector for Claude terminals
+--- @param terminals table[] Array from find_claude_terminals()
+--- @param callback function Called with selected terminal
+local function select_claude_terminal(terminals, callback)
+	local items = {}
+	for i, term in ipairs(terminals) do
+		items[i] = term.name
+	end
+
+	vim.ui.select(items, {
+		prompt = "Select Claude Terminal:",
+		format_item = function(item)
+			return item
+		end,
+	}, function(choice, idx)
+		if idx then
+			callback(terminals[idx])
+		end
+	end)
+end
+
+-- Send prompt to Claude Code terminal
 function M.send_to_terminal()
-	-- Get prompt buffer content (all lines)
+	-- Validate prompt buffer
 	if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then
 		vim.notify("Prompt buffer not found", vim.log.levels.ERROR)
 		return
 	end
 
+	-- Get prompt content
 	local lines = vim.api.nvim_buf_get_lines(state.buf, 0, -1, false)
 	local text = table.concat(lines, "\n")
 
-	-- Check if there's actual content
 	if text:match("^%s*$") then
 		vim.notify("Prompt is empty", vim.log.levels.WARN)
 		return
 	end
 
-	-- Find visible terminal
-	local term_win, term_buf, job_id = find_visible_terminal()
+	-- Find Claude terminals
+	local terminals = find_claude_terminals()
 
-	if not term_win then
-		vim.notify("No visible terminal found", vim.log.levels.WARN)
+	if #terminals == 0 then
+		vim.notify("No Claude Code terminals found in current project", vim.log.levels.WARN)
 		return
 	end
 
-	-- Send text to terminal
-	vim.api.nvim_chan_send(job_id, text .. "\n")
+	-- Helper to send to a specific terminal
+	local function send_to(terminal)
+		vim.api.nvim_chan_send(terminal.job_id, text .. "\n")
+		close_floating_editor()
 
-	-- Close the floating editor
-	close_floating_editor()
+		if terminal.win and vim.api.nvim_win_is_valid(terminal.win) then
+			vim.api.nvim_set_current_win(terminal.win)
+		end
 
-	-- Focus the terminal window (check validity in case it closed)
-	if term_win and vim.api.nvim_win_is_valid(term_win) then
-		vim.api.nvim_set_current_win(term_win)
+		vim.notify("Prompt sent to Claude", vim.log.levels.INFO)
 	end
 
-	vim.notify("Prompt sent to terminal", vim.log.levels.INFO)
+	-- Always show picker (even for single terminal)
+	select_claude_terminal(terminals, send_to)
 end
 
 -- Set up buffer-local keybinding for sending (called when buffer is created)
@@ -216,7 +290,7 @@ local function setup_buffer_keybindings(buf)
 		buffer = buf,
 		noremap = true,
 		silent = true,
-		desc = "Send prompt to terminal",
+		desc = "Send prompt to Claude",
 	})
 
 	vim.keymap.set("i", "<leader><CR>", function()
@@ -226,7 +300,7 @@ local function setup_buffer_keybindings(buf)
 		buffer = buf,
 		noremap = true,
 		silent = true,
-		desc = "Send prompt to terminal",
+		desc = "Send prompt to Claude",
 	})
 end
 
@@ -249,7 +323,7 @@ function M.setup()
 	})
 
 	vim.api.nvim_create_user_command("PromptSend", M.send_to_terminal, {
-		desc = "Send prompt to visible terminal",
+		desc = "Send prompt to Claude Code terminal",
 	})
 end
 
