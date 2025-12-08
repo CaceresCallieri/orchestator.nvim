@@ -1,6 +1,6 @@
 -- Picker Module
 -- Unified terminal selection UI for spawning and selecting Claude instances
--- Shows spawn options at top, existing instances below
+-- Shows existing instances at top, spawn options below
 
 local instances = require("orchestrator.instances")
 local highlights = require("orchestrator.highlights")
@@ -40,7 +40,7 @@ local function format_time_ago(timestamp)
 end
 
 --- Show unified picker for Claude instances and spawn options
---- Displays spawn options first, then existing instances for current project
+--- Displays existing instances first, then spawn options for current project
 --- @param callback function Called with selected terminal {buf, job_id, win, is_new}
 function M.select(callback)
 	if not terminal then
@@ -51,18 +51,7 @@ function M.select(callback)
 	local project_instances = instances.get_for_current_project()
 	local items = {}
 
-	-- Section 1: Spawn new options (in consistent order)
-	for _, key in ipairs(terminal.spawn_order) do
-		local config = terminal.spawn_types[key]
-		table.insert(items, {
-			type = "spawn",
-			spawn_type = key,
-			display = string.format("+ %s", config.label),
-			description = config.description,
-		})
-	end
-
-	-- Section 2: Existing instances (current project only)
+	-- Section 1: Existing instances (current project only)
 	for _, inst in ipairs(project_instances) do
 		local time_ago = format_time_ago(inst.spawned_at)
 		local spawn_label = ""
@@ -82,6 +71,17 @@ function M.select(callback)
 				spawn_label,
 				time_ago
 			),
+		})
+	end
+
+	-- Section 2: Spawn new options (in consistent order)
+	for _, key in ipairs(terminal.spawn_order) do
+		local config = terminal.spawn_types[key]
+		table.insert(items, {
+			type = "spawn",
+			spawn_type = key,
+			display = string.format("+ %s", config.label),
+			description = config.description,
 		})
 	end
 
