@@ -1,5 +1,5 @@
 -- State Module
--- Centralized state management for prompt-editor.nvim
+-- Centralized state management for orchestrator.nvim
 -- Single source of truth for all plugin state
 
 ---@class StateModule

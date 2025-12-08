@@ -2,7 +2,7 @@
 -- Floating prompt editor window management
 -- Provides a toggle-able markdown editor for composing prompts
 
-local state = require("prompt-editor.state")
+local state = require("orchestrator.state")
 
 ---@class EditorModule
 local M = {}

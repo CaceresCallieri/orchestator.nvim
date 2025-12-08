@@ -32,12 +32,12 @@ M.namespace = nil
 --- Call this during plugin setup
 function M.setup()
 	-- Create namespace for status bar highlights
-	M.namespace = vim.api.nvim_create_namespace("PromptEditorStatusBar")
+	M.namespace = vim.api.nvim_create_namespace("OrchestratorStatusBar")
 
 	-- Create highlight groups for each instance color
-	-- PromptEditorClaude1 through PromptEditorClaude8
+	-- OrchestratorClaude1 through OrchestratorClaude8
 	for i, color in ipairs(M.instance_colors) do
-		vim.api.nvim_set_hl(0, "PromptEditorClaude" .. i, {
+		vim.api.nvim_set_hl(0, "OrchestratorClaude" .. i, {
 			fg = color.fg,
 			bg = "none", -- Transparent to match lualine
 			bold = true,
@@ -45,13 +45,13 @@ function M.setup()
 	end
 
 	-- Base status bar highlight (for brackets and spacing)
-	vim.api.nvim_set_hl(0, "PromptEditorStatusBar", {
+	vim.api.nvim_set_hl(0, "OrchestratorStatusBar", {
 		fg = M.colors.white,
 		bg = "none",
 	})
 
 	-- Status bar window background (fully transparent)
-	vim.api.nvim_set_hl(0, "PromptEditorStatusBarBg", {
+	vim.api.nvim_set_hl(0, "OrchestratorStatusBarBg", {
 		bg = "none",
 	})
 end
@@ -60,7 +60,7 @@ end
 --- @param color_idx number Color index (1-8)
 --- @return string highlight_group
 function M.get_instance_highlight(color_idx)
-	return "PromptEditorClaude" .. color_idx
+	return "OrchestratorClaude" .. color_idx
 end
 
 --- Get color name for display (e.g., in picker)

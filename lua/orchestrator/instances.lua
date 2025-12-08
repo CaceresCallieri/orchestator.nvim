@@ -2,7 +2,7 @@
 -- Claude Code instance tracking for spawn-controlled architecture
 -- Handles registration, unregistration, and querying of instances
 
-local state = require("prompt-editor.state")
+local state = require("orchestrator.state")
 
 ---@class InstancesModule
 local M = {}

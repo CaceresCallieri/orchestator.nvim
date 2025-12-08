@@ -2,9 +2,9 @@
 -- Floating status bar UI for displaying Claude instances
 -- Positioned above lualine, styled to match its aesthetic
 
-local state = require("prompt-editor.state")
-local highlights = require("prompt-editor.highlights")
-local instances = require("prompt-editor.instances")
+local state = require("orchestrator.state")
+local highlights = require("orchestrator.highlights")
+local instances = require("orchestrator.instances")
 
 ---@class StatusBarModule
 local M = {}
@@ -16,7 +16,7 @@ local config = {
 	min_width = 10, -- Minimum window width
 	padding = 4, -- Horizontal padding around content
 	max_width_ratio = 0.8, -- Maximum 80% of screen width
-	truncation_indicator = "...", -- Shown when list is truncated
+	active_indicator_display_width = 2, -- Display width of ● character (2 columns in most terminals)
 }
 
 --- Calculate the content width based on number of instances
@@ -35,6 +35,9 @@ local function calculate_content_width()
 			width = width + 1 -- space between
 		end
 	end
+
+	-- Add space for active indicator (●) - only 1 instance can be active at a time
+	width = width + config.active_indicator_display_width
 
 	return width
 end
@@ -74,14 +77,14 @@ local function get_or_create_buffer()
 	vim.bo[buf].swapfile = false
 	vim.bo[buf].modifiable = true
 
-	vim.api.nvim_buf_set_name(buf, "prompt-editor-status-bar")
+	vim.api.nvim_buf_set_name(buf, "orchestrator-status-bar")
 
 	state.state.status_bar.buf = buf
 	return buf
 end
 
 --- Render status bar content with colored instance indicators
---- Handles overflow by truncating with "..." indicator
+--- Shows ● indicator for the currently focused instance
 --- @param buf number Status bar buffer
 local function render(buf)
 	local all_instances = instances.get_all()
@@ -91,62 +94,41 @@ local function render(buf)
 		return
 	end
 
-	local win_opts = get_position()
-	local available_width = win_opts.width - config.padding
+	-- Detect active instance (the one in the current window)
+	local current_win = vim.api.nvim_get_current_win()
 
-	-- Build parts, checking for overflow
-	-- First pass: calculate total width needed for all instances
-	local total_needed = 0
-	for i, inst in ipairs(all_instances) do
-		total_needed = total_needed + #string.format("[%d]", inst.number)
-		if i < #all_instances then
-			total_needed = total_needed + 1 -- space separator
-		end
+	-- Validate current window before proceeding
+	if not vim.api.nvim_win_is_valid(current_win) then
+		return
 	end
 
+	local win_opts = get_position()
+
+	-- Build parts for all instances
 	local parts = {}
-	local current_width = 0
-	local truncated = false
 	local displayed_instances = {}
-	local needs_truncation = total_needed > available_width
 
 	for i, inst in ipairs(all_instances) do
-		local part = string.format("[%d]", inst.number)
-		local separator = i < #all_instances and " " or ""
-		local part_width = #part + #separator
-		local remaining = available_width - current_width
-
-		-- Only reserve truncation space if we know we can't fit everything
-		if needs_truncation then
-			local truncation_width = #config.truncation_indicator + 1
-			if remaining < part_width + truncation_width then
-				truncated = true
-				break
-			end
-		else
-			-- Everything fits, just check if this item fits
-			if remaining < part_width then
-				truncated = true
-				break
-			end
-		end
+		-- Validate inst.win before comparing (may have been closed)
+		local is_active = inst.win
+			and vim.api.nvim_win_is_valid(inst.win)
+			and inst.win == current_win
+		local part = is_active and string.format("[%d●]", inst.number) or string.format("[%d]", inst.number)
 
 		table.insert(parts, part)
-		table.insert(displayed_instances, inst)
-		if separator ~= "" then
-			table.insert(parts, separator)
-		end
-		current_width = current_width + part_width
-	end
+		table.insert(displayed_instances, { inst = inst, is_active = is_active })
 
-	if truncated then
-		table.insert(parts, " " .. config.truncation_indicator)
+		if i < #all_instances then
+			table.insert(parts, " ")
+		end
 	end
 
 	local line = table.concat(parts)
 
 	-- Center the content with padding
-	local padding = math.floor((win_opts.width - #line) / 2)
+	-- Use strdisplaywidth for correct Unicode character width (● is 2 columns)
+	local display_width = vim.fn.strdisplaywidth(line)
+	local padding = math.floor((win_opts.width - display_width) / 2)
 	local padded_line = string.rep(" ", padding) .. line
 
 	vim.bo[buf].modifiable = true
@@ -157,8 +139,10 @@ local function render(buf)
 	vim.api.nvim_buf_clear_namespace(buf, highlights.namespace, 0, -1)
 
 	local col = padding
-	for i, inst in ipairs(displayed_instances) do
-		local text = string.format("[%d]", inst.number)
+	for i, entry in ipairs(displayed_instances) do
+		local inst = entry.inst
+		local is_active = entry.is_active
+		local text = is_active and string.format("[%d●]", inst.number) or string.format("[%d]", inst.number)
 		vim.api.nvim_buf_set_extmark(buf, highlights.namespace, 0, col, {
 			end_col = col + #text,
 			hl_group = highlights.get_instance_highlight(inst.color_idx),
@@ -195,7 +179,7 @@ function M.show()
 	vim.wo[win].relativenumber = false
 	vim.wo[win].cursorline = false
 	vim.wo[win].signcolumn = "no"
-	vim.wo[win].winhighlight = "Normal:PromptEditorStatusBarBg,NormalFloat:PromptEditorStatusBarBg"
+	vim.wo[win].winhighlight = "Normal:OrchestratorStatusBarBg,NormalFloat:OrchestratorStatusBarBg"
 
 	state.state.status_bar.win = win
 	render(buf)

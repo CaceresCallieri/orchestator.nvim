@@ -1,21 +1,21 @@
--- Prompt Editor Module
--- Main entry point and public API for prompt-editor.nvim
+-- Orchestrator Module
+-- Main entry point and public API for orchestrator.nvim
 -- Orchestrates all sub-modules for a unified experience
 
----@class PromptEditorModule
+---@class OrchestratorModule
 local M = {}
 
 -- Load sub-modules
-local state = require("prompt-editor.state")
-local highlights = require("prompt-editor.highlights")
-local instances = require("prompt-editor.instances")
-local status_bar = require("prompt-editor.status_bar")
-local picker = require("prompt-editor.picker")
-local editor = require("prompt-editor.editor")
-local terminal = require("prompt-editor.terminal")
+local state = require("orchestrator.state")
+local highlights = require("orchestrator.highlights")
+local instances = require("orchestrator.instances")
+local status_bar = require("orchestrator.status_bar")
+local picker = require("orchestrator.picker")
+local editor = require("orchestrator.editor")
+local terminal = require("orchestrator.terminal")
 
 -- Create autocmd group
-local augroup = vim.api.nvim_create_augroup("PromptEditor", { clear = true })
+local augroup = vim.api.nvim_create_augroup("Orchestrator", { clear = true })
 
 -- ============================================================
 -- PUBLIC API: Editor Functions
@@ -102,7 +102,7 @@ function M.kill(num)
 	end
 
 	if not num then
-		vim.notify("Usage: :PromptKill <number> (1-" .. #project_instances .. ")", vim.log.levels.WARN)
+		vim.notify("Usage: :AgentsKill <number> (1-" .. #project_instances .. ")", vim.log.levels.WARN)
 		return
 	end
 
@@ -201,6 +201,30 @@ local function setup_terminal_autocmds()
 			status_bar.reposition()
 		end,
 	})
+
+	-- Focus changed: update status bar to show active instance indicator
+	-- WinEnter: fires when switching windows (split navigation)
+	-- BufEnter: fires when switching buffers in same window (<C-6>, :bnext, etc.)
+	-- Filtering prevents excessive updates - only triggers for Claude buffers
+	vim.api.nvim_create_autocmd({ "WinEnter", "BufEnter" }, {
+		group = augroup,
+		callback = function()
+			if instances.count() == 0 then
+				return
+			end
+
+			local current_buf = vim.api.nvim_get_current_buf()
+			local prev_buf = vim.fn.bufnr("#")
+
+			-- Only update if entering or leaving a Claude terminal
+			local current_is_claude = instances.get_by_buf(current_buf) ~= nil
+			local prev_is_claude = prev_buf > 0 and instances.get_by_buf(prev_buf) ~= nil
+
+			if current_is_claude or prev_is_claude then
+				status_bar.update()
+			end
+		end,
+	})
 end
 
 -- ============================================================
@@ -209,23 +233,23 @@ end
 
 --- Create user commands
 local function setup_user_commands()
-	vim.api.nvim_create_user_command("PromptToggle", M.toggle, {
+	vim.api.nvim_create_user_command("PromptEditorToggle", M.toggle, {
 		desc = "Toggle prompt editor",
 	})
 
-	vim.api.nvim_create_user_command("PromptSend", M.send_to_terminal, {
+	vim.api.nvim_create_user_command("PromptEditorSend", M.send_to_terminal, {
 		desc = "Send prompt to Claude Code terminal",
 	})
 
-	vim.api.nvim_create_user_command("PromptStatusToggle", M.toggle_status_bar, {
+	vim.api.nvim_create_user_command("AgentsStatusBarToggle", M.toggle_status_bar, {
 		desc = "Toggle Claude instances status bar",
 	})
 
-	vim.api.nvim_create_user_command("PromptPick", M.pick, {
+	vim.api.nvim_create_user_command("AgentsPick", M.pick, {
 		desc = "Pick/spawn Claude terminal",
 	})
 
-	vim.api.nvim_create_user_command("PromptSpawn", function(opts)
+	vim.api.nvim_create_user_command("AgentsSpawn", function(opts)
 		local spawn_type = opts.args ~= "" and opts.args or "fresh"
 		M.spawn(spawn_type)
 	end, {
@@ -236,7 +260,7 @@ local function setup_user_commands()
 		end,
 	})
 
-	vim.api.nvim_create_user_command("PromptKill", function(opts)
+	vim.api.nvim_create_user_command("AgentsKill", function(opts)
 		if opts.args == "" then
 			M.kill(nil) -- Will show usage message
 			return
@@ -252,10 +276,10 @@ local function setup_user_commands()
 		nargs = "?",
 	})
 
-	vim.api.nvim_create_user_command("PromptDebug", function()
+	vim.api.nvim_create_user_command("OrchestratorDebug", function()
 		local all = instances.get_all()
 		local project = instances.get_for_current_project()
-		print("=== Prompt Editor Debug ===")
+		print("=== Orchestrator Debug ===")
 		print("Total instances: " .. #all)
 		print("Project instances: " .. #project)
 		print("Current cwd: " .. vim.fn.getcwd())
@@ -273,7 +297,7 @@ local function setup_user_commands()
 		print("Status bar visible: " .. tostring(state.state.status_bar.visible))
 		print("Status bar win: " .. tostring(state.state.status_bar.win))
 	end, {
-		desc = "Debug prompt-editor state",
+		desc = "Debug orchestrator state",
 	})
 end
 
@@ -317,15 +341,15 @@ function M.teardown()
 
 	state.reset()
 
-	pcall(vim.api.nvim_del_augroup_by_name, "PromptEditor")
+	pcall(vim.api.nvim_del_augroup_by_name, "Orchestrator")
 
-	pcall(vim.api.nvim_del_user_command, "PromptToggle")
-	pcall(vim.api.nvim_del_user_command, "PromptSend")
-	pcall(vim.api.nvim_del_user_command, "PromptStatusToggle")
-	pcall(vim.api.nvim_del_user_command, "PromptPick")
-	pcall(vim.api.nvim_del_user_command, "PromptSpawn")
-	pcall(vim.api.nvim_del_user_command, "PromptKill")
-	pcall(vim.api.nvim_del_user_command, "PromptDebug")
+	pcall(vim.api.nvim_del_user_command, "PromptEditorToggle")
+	pcall(vim.api.nvim_del_user_command, "PromptEditorSend")
+	pcall(vim.api.nvim_del_user_command, "AgentsStatusBarToggle")
+	pcall(vim.api.nvim_del_user_command, "AgentsPick")
+	pcall(vim.api.nvim_del_user_command, "AgentsSpawn")
+	pcall(vim.api.nvim_del_user_command, "AgentsKill")
+	pcall(vim.api.nvim_del_user_command, "OrchestratorDebug")
 end
 
 return M

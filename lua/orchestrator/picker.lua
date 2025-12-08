@@ -2,8 +2,8 @@
 -- Unified terminal selection UI for spawning and selecting Claude instances
 -- Shows spawn options at top, existing instances below
 
-local instances = require("prompt-editor.instances")
-local highlights = require("prompt-editor.highlights")
+local instances = require("orchestrator.instances")
+local highlights = require("orchestrator.highlights")
 
 ---@class PickerModule
 local M = {}
