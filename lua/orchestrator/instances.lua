@@ -76,6 +76,11 @@ function M.unregister(buf)
 		if inst.buf == buf then
 			table.remove(state.state.claude_instances, i)
 
+			-- Clear last_active_buf if it was this instance to prevent stale references
+			if state.state.last_active_buf == buf then
+				state.state.last_active_buf = nil
+			end
+
 			if status_bar then
 				if #state.state.claude_instances == 0 then
 					status_bar.hide()

@@ -102,6 +102,15 @@ local function render(buf)
 		return
 	end
 
+	-- Check if the Prompt Editor is currently focused
+	-- When focused, use last_active_buf to determine which Claude instance is "contextually active"
+	-- NOTE: We check the BUFFER, not the window, because the window ID isn't set until after
+	-- nvim_open_win returns, but the WinEnter autocmd fires during nvim_open_win
+	local current_buf = vim.api.nvim_win_get_buf(current_win)
+	local editor_is_focused = state.state.editor.buf
+		and vim.api.nvim_buf_is_valid(state.state.editor.buf)
+		and current_buf == state.state.editor.buf
+
 	local win_opts = get_position()
 
 	-- Build parts for all instances
@@ -109,10 +118,20 @@ local function render(buf)
 	local displayed_instances = {}
 
 	for i, inst in ipairs(all_instances) do
-		-- Validate inst.win before comparing (may have been closed)
-		local is_active = inst.win
-			and vim.api.nvim_win_is_valid(inst.win)
-			and inst.win == current_win
+		local is_active
+		if editor_is_focused then
+			-- When editor is focused, match by last_active_buf instead of window
+			-- Validate that last_active_buf is still valid before using it
+			local last_buf = state.state.last_active_buf
+			is_active = last_buf
+				and vim.api.nvim_buf_is_valid(last_buf)
+				and inst.buf == last_buf
+		else
+			-- Normal case: match by window
+			is_active = inst.win
+				and vim.api.nvim_win_is_valid(inst.win)
+				and inst.win == current_win
+		end
 		local part = is_active and string.format("[%d●]", inst.number) or string.format("[%d]", inst.number)
 
 		table.insert(parts, part)
