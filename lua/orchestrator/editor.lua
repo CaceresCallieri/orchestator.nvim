@@ -53,7 +53,15 @@ end
 local function get_window_position()
 	local width = math.floor(vim.o.columns * config.width_ratio)
 	local height = math.floor(vim.o.lines * config.height_ratio)
-	local row = vim.o.lines - height - config.bottom_margin
+
+	-- Dynamic bottom margin: account for status bar when visible
+	-- Use larger margin (5) to keep status bar visible below the editor
+	local status_bar_visible = state.state.status_bar.visible
+		and state.state.status_bar.win
+		and vim.api.nvim_win_is_valid(state.state.status_bar.win)
+	local bottom_margin = status_bar_visible and 5 or config.bottom_margin
+
+	local row = vim.o.lines - height - bottom_margin
 	local col = math.floor((vim.o.columns - width) / 2)
 
 	return {
