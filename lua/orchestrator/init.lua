@@ -118,6 +118,32 @@ function M.kill(num)
 	vim.notify(string.format("Killed Claude instance %d", num), vim.log.levels.INFO)
 end
 
+--- Focus a Claude instance by project-local number
+--- @param num number|nil Instance number (1-indexed, within current project)
+function M.focus(num)
+	local project_instances = instances.get_for_current_project()
+
+	if #project_instances == 0 then
+		vim.notify("No Claude instances in current project", vim.log.levels.WARN)
+		return
+	end
+
+	if not num then
+		vim.notify("Usage: :AgentsFocus <number> (1-" .. #project_instances .. ")", vim.log.levels.WARN)
+		return
+	end
+
+	if num < 1 or num > #project_instances then
+		vim.notify(
+			string.format("Invalid instance number %d. Valid range: 1-%d", num, #project_instances),
+			vim.log.levels.WARN
+		)
+		return
+	end
+
+	terminal.focus(project_instances[num])
+end
+
 -- ============================================================
 -- CORE: Send to Terminal
 -- ============================================================
@@ -281,6 +307,22 @@ local function setup_user_commands()
 		nargs = "?",
 	})
 
+	vim.api.nvim_create_user_command("AgentsFocus", function(opts)
+		if opts.args == "" then
+			M.focus(nil) -- Will show usage message
+			return
+		end
+		local num = tonumber(opts.args)
+		if not num then
+			vim.notify("Instance number must be a number", vim.log.levels.ERROR)
+			return
+		end
+		M.focus(num)
+	end, {
+		desc = "Focus Claude instance by number",
+		nargs = "?",
+	})
+
 	vim.api.nvim_create_user_command("OrchestratorDebug", function()
 		local all = instances.get_all()
 		local project = instances.get_for_current_project()
@@ -354,6 +396,7 @@ function M.teardown()
 	pcall(vim.api.nvim_del_user_command, "AgentsPick")
 	pcall(vim.api.nvim_del_user_command, "AgentsSpawn")
 	pcall(vim.api.nvim_del_user_command, "AgentsKill")
+	pcall(vim.api.nvim_del_user_command, "AgentsFocus")
 	pcall(vim.api.nvim_del_user_command, "OrchestratorDebug")
 end
 
