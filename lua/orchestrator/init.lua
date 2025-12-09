@@ -220,6 +220,11 @@ local function setup_terminal_autocmds()
 			local current_is_claude = instances.get_by_buf(current_buf) ~= nil
 			local prev_is_claude = prev_buf > 0 and instances.get_by_buf(prev_buf) ~= nil
 
+			-- Track last active Claude instance for picker prioritization
+			if current_is_claude then
+				state.state.last_active_buf = current_buf
+			end
+
 			if current_is_claude or prev_is_claude then
 				status_bar.update()
 			end

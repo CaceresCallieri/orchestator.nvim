@@ -4,6 +4,7 @@
 
 local instances = require("orchestrator.instances")
 local highlights = require("orchestrator.highlights")
+local state = require("orchestrator.state")
 
 ---@class PickerModule
 local M = {}
@@ -50,6 +51,24 @@ function M.select(callback)
 
 	local project_instances = instances.get_for_current_project()
 	local items = {}
+
+	-- Prioritize the last active Claude instance (tracked via WinEnter/BufEnter)
+	local last_active_buf = state.state.last_active_buf
+	if last_active_buf then
+		local last_active_idx = nil
+		for i, inst in ipairs(project_instances) do
+			if inst.buf == last_active_buf then
+				last_active_idx = i
+				break
+			end
+		end
+
+		-- Move last active instance to the front if found and not already first
+		if last_active_idx and last_active_idx > 1 then
+			local active_inst = table.remove(project_instances, last_active_idx)
+			table.insert(project_instances, 1, active_inst)
+		end
+	end
 
 	-- Section 1: Existing instances (current project only)
 	for _, inst in ipairs(project_instances) do

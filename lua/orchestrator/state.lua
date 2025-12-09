@@ -34,6 +34,9 @@ M.state = {
 
 	-- Next color index to assign (1-8, wraps around)
 	next_color_idx = 1,
+
+	-- Last active Claude instance buffer (for picker prioritization)
+	last_active_buf = nil,
 }
 
 --- Reset all state to initial values
@@ -46,6 +49,7 @@ function M.reset()
 	M.state.status_bar.visible = true
 	M.state.claude_instances = {}
 	M.state.next_color_idx = 1
+	M.state.last_active_buf = nil
 end
 
 --- Get next color index and increment
