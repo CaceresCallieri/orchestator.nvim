@@ -114,6 +114,16 @@ local function setup_buffer_keybindings(buf)
 		silent = true,
 		desc = "Send prompt to Claude",
 	})
+
+	-- Close editor with Escape in normal mode
+	vim.keymap.set("n", "<Esc>", function()
+		M.close()
+	end, {
+		buffer = buf,
+		noremap = true,
+		silent = true,
+		desc = "Close prompt editor",
+	})
 end
 
 --- Open the floating prompt editor
