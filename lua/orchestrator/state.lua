@@ -8,10 +8,11 @@ local M = {}
 -- Main state table
 -- All modules should access state through this module's functions
 M.state = {
-	-- Prompt editor window state
+	-- Prompt editor window state (multi-tab)
 	editor = {
-		win = nil, -- Window ID of floating prompt editor
-		buf = nil, -- Buffer ID of prompt buffer
+		win = nil, -- Window ID of floating prompt editor (shared across tabs)
+		tabs = {}, -- Array of {buf = number, name = string}
+		current_tab_idx = 1, -- Index into tabs array (1-indexed)
 	},
 
 	-- Status bar state
@@ -43,7 +44,8 @@ M.state = {
 --- Used in teardown for clean plugin unload
 function M.reset()
 	M.state.editor.win = nil
-	M.state.editor.buf = nil
+	M.state.editor.tabs = {}
+	M.state.editor.current_tab_idx = 1
 	M.state.status_bar.win = nil
 	M.state.status_bar.buf = nil
 	M.state.status_bar.visible = true

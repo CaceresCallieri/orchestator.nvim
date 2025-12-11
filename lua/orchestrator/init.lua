@@ -37,6 +37,30 @@ function M.close()
 end
 
 -- ============================================================
+-- PUBLIC API: Editor Tab Functions
+-- ============================================================
+
+--- Create a new prompt editor tab
+function M.new_tab()
+	editor.new_tab()
+end
+
+--- Navigate to the next prompt editor tab
+function M.next_tab()
+	editor.next_tab()
+end
+
+--- Navigate to the previous prompt editor tab
+function M.prev_tab()
+	editor.prev_tab()
+end
+
+--- Delete the current prompt editor tab
+function M.delete_tab()
+	editor.delete_tab()
+end
+
+-- ============================================================
 -- PUBLIC API: Status Bar Functions
 -- ============================================================
 
@@ -179,6 +203,8 @@ function M.send_to_terminal()
 			return
 		end
 
+		-- Delete the tab after sending (per user preference)
+		editor.delete_tab()
 		editor.close()
 
 		if not term.is_new then
@@ -270,6 +296,22 @@ local function setup_user_commands()
 
 	vim.api.nvim_create_user_command("PromptEditorSend", M.send_to_terminal, {
 		desc = "Send prompt to Claude Code terminal",
+	})
+
+	vim.api.nvim_create_user_command("PromptEditorNew", M.new_tab, {
+		desc = "Create new prompt editor tab",
+	})
+
+	vim.api.nvim_create_user_command("PromptEditorNext", M.next_tab, {
+		desc = "Navigate to next prompt editor tab",
+	})
+
+	vim.api.nvim_create_user_command("PromptEditorPrev", M.prev_tab, {
+		desc = "Navigate to previous prompt editor tab",
+	})
+
+	vim.api.nvim_create_user_command("PromptEditorDelete", M.delete_tab, {
+		desc = "Delete current prompt editor tab",
 	})
 
 	vim.api.nvim_create_user_command("AgentsStatusBarToggle", M.toggle_status_bar, {
@@ -376,8 +418,11 @@ function M.teardown()
 		vim.api.nvim_win_close(state.state.editor.win, true)
 	end
 
-	if state.state.editor.buf and vim.api.nvim_buf_is_valid(state.state.editor.buf) then
-		vim.api.nvim_buf_delete(state.state.editor.buf, { force = true })
+	-- Delete all tab buffers
+	for _, tab in ipairs(state.state.editor.tabs or {}) do
+		if tab.buf and vim.api.nvim_buf_is_valid(tab.buf) then
+			vim.api.nvim_buf_delete(tab.buf, { force = true })
+		end
 	end
 
 	status_bar.hide()
@@ -392,6 +437,10 @@ function M.teardown()
 
 	pcall(vim.api.nvim_del_user_command, "PromptEditorToggle")
 	pcall(vim.api.nvim_del_user_command, "PromptEditorSend")
+	pcall(vim.api.nvim_del_user_command, "PromptEditorNew")
+	pcall(vim.api.nvim_del_user_command, "PromptEditorNext")
+	pcall(vim.api.nvim_del_user_command, "PromptEditorPrev")
+	pcall(vim.api.nvim_del_user_command, "PromptEditorDelete")
 	pcall(vim.api.nvim_del_user_command, "AgentsStatusBarToggle")
 	pcall(vim.api.nvim_del_user_command, "AgentsPick")
 	pcall(vim.api.nvim_del_user_command, "AgentsSpawn")
