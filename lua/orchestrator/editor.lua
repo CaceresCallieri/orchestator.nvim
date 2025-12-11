@@ -445,17 +445,14 @@ function M.delete_tab()
 
 	-- Get the tab to delete
 	local tab_to_delete = tabs[idx]
+	local buf_to_delete = tab_to_delete and tab_to_delete.buf or nil
 
-	-- Delete the buffer
-	if tab_to_delete and vim.api.nvim_buf_is_valid(tab_to_delete.buf) then
-		vim.api.nvim_buf_delete(tab_to_delete.buf, { force = true })
-	end
-
-	-- Remove from tabs array
+	-- Remove from tabs array first
 	table.remove(tabs, idx)
 
-	-- If this was the last tab, create a new empty one
+	-- Determine new current index
 	if #tabs == 0 then
+		-- Create a new empty tab if this was the last one
 		create_new_tab()
 		state.state.editor.current_tab_idx = 1
 	else
@@ -466,9 +463,15 @@ function M.delete_tab()
 		-- Otherwise idx stays the same (next tab slides into position)
 	end
 
-	-- If window is open, switch to new current buffer
+	-- If window is open, switch to the new current buffer BEFORE deleting
+	-- This prevents Neovim from closing the window when its buffer is deleted
 	if M.is_open() then
 		switch_to_current_tab()
+	end
+
+	-- Now safe to delete the old buffer
+	if buf_to_delete and vim.api.nvim_buf_is_valid(buf_to_delete) then
+		vim.api.nvim_buf_delete(buf_to_delete, { force = true })
 	end
 end
 
