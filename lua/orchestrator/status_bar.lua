@@ -16,28 +16,25 @@ local config = {
 	min_width = 10, -- Minimum window width
 	padding = 4, -- Horizontal padding around content
 	max_width_ratio = 0.8, -- Maximum 80% of screen width
-	active_indicator_display_width = 2, -- Display width of ● character (2 columns in most terminals)
+	-- Bubble effect separators (powerline rounded symbols)
+	bubble_left = "", -- U+E0B6 (left semicircle)
+	bubble_right = "", -- U+E0B4 (right semicircle)
 }
 
 --- Calculate the content width based on number of instances
---- @return number width Content width in characters
+--- Uses bubble format for active ( X ) and parentheses for inactive (X)
+--- @return number width Content width in display columns
 local function calculate_content_width()
 	local count = instances.count()
 	if count == 0 then
 		return 0
 	end
 
-	-- Format: "[1] [2] [3]" = 3 chars per instance + 1 space between
-	local width = 0
-	for i = 1, count do
-		width = width + #string.format("[%d]", i)
-		if i < count then
-			width = width + 1 -- space between
-		end
-	end
+	-- All agents use bubble format:  X
+	local bubble_width = vim.fn.strdisplaywidth(config.bubble_left .. " 9 " .. config.bubble_right)
 
-	-- Add space for active indicator (●) - only 1 instance can be active at a time
-	width = width + config.active_indicator_display_width
+	-- Each agent is a bubble + space between (except last)
+	local width = count * bubble_width + (count - 1)
 
 	return width
 end
@@ -84,7 +81,8 @@ local function get_or_create_buffer()
 end
 
 --- Render status bar content with colored instance indicators
---- Shows ● indicator for the currently focused instance
+--- Active instance displayed as bubble with chevron separators
+--- Inactive instances displayed with parentheses
 --- @param buf number Status bar buffer
 local function render(buf)
 	local all_instances = instances.get_all()
@@ -113,9 +111,10 @@ local function render(buf)
 
 	local win_opts = get_position()
 
-	-- Build parts for all instances
+	-- Build parts and track highlight regions
 	local parts = {}
-	local displayed_instances = {}
+	local highlight_regions = {} -- {start_byte, end_byte, hl_group}
+	local byte_offset = 0 -- Track byte position for extmarks
 
 	for i, inst in ipairs(all_instances) do
 		local is_active
@@ -132,22 +131,66 @@ local function render(buf)
 				and vim.api.nvim_win_is_valid(inst.win)
 				and inst.win == current_win
 		end
-		local part = is_active and string.format("[%d●]", inst.number) or string.format("[%d]", inst.number)
 
-		table.insert(parts, part)
-		table.insert(displayed_instances, { inst = inst, is_active = is_active })
+		-- All agents use bubble format:  X
+		local left_cap = config.bubble_left
+		local content = " " .. inst.number .. " "
+		local right_cap = config.bubble_right
 
+		-- Add parts
+		table.insert(parts, left_cap)
+		table.insert(parts, content)
+		table.insert(parts, right_cap)
+
+		-- Determine highlight groups based on active state
+		-- Active: full brightness, Inactive: dimmed
+		local left_cap_hl, content_hl, right_cap_hl
+		if is_active then
+			left_cap_hl = highlights.get_instance_chevron_highlight(inst.color_idx, "left")
+			content_hl = highlights.get_instance_active_highlight(inst.color_idx)
+			right_cap_hl = highlights.get_instance_chevron_highlight(inst.color_idx, "right")
+		else
+			left_cap_hl = highlights.get_instance_chevron_dim_highlight(inst.color_idx, "left")
+			content_hl = highlights.get_instance_dim_highlight(inst.color_idx)
+			right_cap_hl = highlights.get_instance_chevron_dim_highlight(inst.color_idx, "right")
+		end
+
+		-- Track highlight regions for left bubble cap
+		table.insert(highlight_regions, {
+			start_byte = byte_offset,
+			end_byte = byte_offset + #left_cap,
+			hl_group = left_cap_hl,
+		})
+		byte_offset = byte_offset + #left_cap
+
+		-- Track highlight regions for content
+		table.insert(highlight_regions, {
+			start_byte = byte_offset,
+			end_byte = byte_offset + #content,
+			hl_group = content_hl,
+		})
+		byte_offset = byte_offset + #content
+
+		-- Track highlight regions for right bubble cap
+		table.insert(highlight_regions, {
+			start_byte = byte_offset,
+			end_byte = byte_offset + #right_cap,
+			hl_group = right_cap_hl,
+		})
+		byte_offset = byte_offset + #right_cap
+
+		-- Add space between instances
 		if i < #all_instances then
 			table.insert(parts, " ")
+			byte_offset = byte_offset + 1
 		end
 	end
 
 	local line = table.concat(parts)
 
 	-- Center the content with padding
-	-- Use strdisplaywidth for correct Unicode character width (● is 2 columns)
 	local display_width = vim.fn.strdisplaywidth(line)
-	local padding = math.floor((win_opts.width - display_width) / 2)
+	local padding = math.max(0, math.floor((win_opts.width - display_width) / 2))
 	local padded_line = string.rep(" ", padding) .. line
 
 	vim.bo[buf].modifiable = true
@@ -157,19 +200,11 @@ local function render(buf)
 	-- Apply highlights using extmarks
 	vim.api.nvim_buf_clear_namespace(buf, highlights.namespace, 0, -1)
 
-	local col = padding
-	for i, entry in ipairs(displayed_instances) do
-		local inst = entry.inst
-		local is_active = entry.is_active
-		local text = is_active and string.format("[%d●]", inst.number) or string.format("[%d]", inst.number)
-		vim.api.nvim_buf_set_extmark(buf, highlights.namespace, 0, col, {
-			end_col = col + #text,
-			hl_group = highlights.get_instance_highlight(inst.color_idx),
+	for _, region in ipairs(highlight_regions) do
+		vim.api.nvim_buf_set_extmark(buf, highlights.namespace, 0, padding + region.start_byte, {
+			end_col = padding + region.end_byte,
+			hl_group = region.hl_group,
 		})
-		col = col + #text
-		if i < #displayed_instances then
-			col = col + 1 -- space
-		end
 	end
 end
 

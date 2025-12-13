@@ -33,6 +33,9 @@ local function build_window_lookup()
 	return buf_to_win
 end
 
+--- Maximum supported instances (matches color palette size in highlights.lua)
+local MAX_INSTANCES = 8
+
 --- Register a spawned Claude instance
 --- @param buf number Terminal buffer ID
 --- @param job_id number Terminal job ID
@@ -45,6 +48,14 @@ function M.register_spawned(buf, job_id, cwd, spawn_type)
 		if inst.buf == buf then
 			return inst
 		end
+	end
+
+	-- Warn if exceeding color palette (colors will cycle/repeat)
+	if #state.state.claude_instances >= MAX_INSTANCES then
+		vim.notify(
+			string.format("More than %d instances: colors will repeat", MAX_INSTANCES),
+			vim.log.levels.WARN
+		)
 	end
 
 	local color_idx = state.get_next_color_idx()
