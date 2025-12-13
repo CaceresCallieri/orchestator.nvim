@@ -5,24 +5,24 @@
 ---@class HighlightsModule
 local M = {}
 
--- Base colors (matching user's lualine theme)
+-- Base colors (from wine theme)
 M.colors = {
-	white = "#C2C2C2", -- Default text color
-	black = "#1A1A1A", -- Background when needed
-	yellow = "#FDD886", -- Terminal mode accent
+	white = "#DDDDDD", -- fg_primary from wine theme
+	black = "#131313", -- bg_primary from wine theme
+	yellow = "#fdd888", -- func from wine theme
 }
 
 -- Instance color palette (8 distinct colors for Claude instances)
--- All use transparent backgrounds to match lualine aesthetic
+-- Wine theme colors: mix of syntax and terminal colors
 M.instance_colors = {
-	{ name = "Red", fg = "#FF6B6B" },
-	{ name = "Blue", fg = "#6B9FFF" },
-	{ name = "Green", fg = "#6BFF9F" },
-	{ name = "Yellow", fg = "#FFD96B" },
-	{ name = "Magenta", fg = "#FF6BD9" },
-	{ name = "Cyan", fg = "#6BD9FF" },
-	{ name = "Orange", fg = "#FF9F6B" },
-	{ name = "Purple", fg = "#9F6BFF" },
+	{ name = "Func", fg = "#fdd888" }, -- warm yellow (syntax)
+	{ name = "Blue", fg = "#6d94e9" }, -- accent blue (terminal)
+	{ name = "Green", fg = "#62BA46" }, -- string green (syntax)
+	{ name = "Magenta", fg = "#D86DE9" }, -- bright magenta (terminal)
+	{ name = "Orange", fg = "#c75828" }, -- type color (syntax)
+	{ name = "Cyan", fg = "#5BDFD8" }, -- bright cyan (terminal)
+	{ name = "Amber", fg = "#c28b12" }, -- keyword amber (syntax)
+	{ name = "Peach", fg = "#E19773" }, -- variable peach (syntax)
 }
 
 -- Namespace for status bar extmarks
