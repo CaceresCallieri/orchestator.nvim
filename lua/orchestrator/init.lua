@@ -388,6 +388,12 @@ local function setup_user_commands()
 	end, {
 		desc = "Debug orchestrator state",
 	})
+
+	vim.api.nvim_create_user_command("OrchestratorReload", function()
+		M.reload()
+	end, {
+		desc = "Reload orchestrator plugin (preserves instances)",
+	})
 end
 
 -- ============================================================
@@ -409,44 +415,126 @@ function M.setup()
 end
 
 -- ============================================================
--- TEARDOWN: Cleanup
+-- CLEANUP HELPERS: Shared by reload and teardown
 -- ============================================================
 
---- Teardown function for testing and cleanup
-function M.teardown()
+-- List of all user commands registered by the plugin
+local user_commands = {
+	"PromptEditorToggle",
+	"PromptEditorSend",
+	"PromptEditorNew",
+	"PromptEditorNext",
+	"PromptEditorPrev",
+	"PromptEditorDelete",
+	"AgentsStatusBarToggle",
+	"AgentsPick",
+	"AgentsSpawn",
+	"AgentsKill",
+	"AgentsFocus",
+	"OrchestratorDebug",
+	"OrchestratorReload",
+}
+
+--- Close UI windows and delete UI buffers
+local function cleanup_ui()
+	-- Close editor window
 	if state.state.editor.win and vim.api.nvim_win_is_valid(state.state.editor.win) then
 		vim.api.nvim_win_close(state.state.editor.win, true)
 	end
 
-	-- Delete all tab buffers
+	-- Delete all editor tab buffers
 	for _, tab in ipairs(state.state.editor.tabs or {}) do
 		if tab.buf and vim.api.nvim_buf_is_valid(tab.buf) then
 			vim.api.nvim_buf_delete(tab.buf, { force = true })
 		end
 	end
 
+	-- Hide and delete status bar
 	status_bar.hide()
-
 	if state.state.status_bar.buf and vim.api.nvim_buf_is_valid(state.state.status_bar.buf) then
 		vim.api.nvim_buf_delete(state.state.status_bar.buf, { force = true })
 	end
+end
 
-	state.reset()
-
+--- Delete autocmds and user commands
+local function cleanup_commands()
 	pcall(vim.api.nvim_del_augroup_by_name, "Orchestrator")
 
-	pcall(vim.api.nvim_del_user_command, "PromptEditorToggle")
-	pcall(vim.api.nvim_del_user_command, "PromptEditorSend")
-	pcall(vim.api.nvim_del_user_command, "PromptEditorNew")
-	pcall(vim.api.nvim_del_user_command, "PromptEditorNext")
-	pcall(vim.api.nvim_del_user_command, "PromptEditorPrev")
-	pcall(vim.api.nvim_del_user_command, "PromptEditorDelete")
-	pcall(vim.api.nvim_del_user_command, "AgentsStatusBarToggle")
-	pcall(vim.api.nvim_del_user_command, "AgentsPick")
-	pcall(vim.api.nvim_del_user_command, "AgentsSpawn")
-	pcall(vim.api.nvim_del_user_command, "AgentsKill")
-	pcall(vim.api.nvim_del_user_command, "AgentsFocus")
-	pcall(vim.api.nvim_del_user_command, "OrchestratorDebug")
+	for _, cmd in ipairs(user_commands) do
+		pcall(vim.api.nvim_del_user_command, cmd)
+	end
+end
+
+-- ============================================================
+-- RELOAD: Hot-reload for development
+-- ============================================================
+
+--- Reload the plugin without restarting Neovim
+--- Preserves running Claude instances while reloading all code
+--- Note: Editor tab contents are not preserved (buffers are recreated)
+function M.reload()
+	-- 1. Save state before teardown
+	local saved_instances = vim.deepcopy(state.state.claude_instances)
+	local saved_color_idx = state.state.next_color_idx
+	local saved_last_active = state.state.last_active_buf
+	local saved_status_bar_visible = state.state.status_bar.visible
+
+	-- 2. Close UI windows (but NOT terminal buffers)
+	cleanup_ui()
+
+	-- 3. Delete autocmds and commands
+	cleanup_commands()
+
+	-- 4. Clear Lua module cache
+	local modules = {
+		"orchestrator",
+		"orchestrator.state",
+		"orchestrator.highlights",
+		"orchestrator.instances",
+		"orchestrator.status_bar",
+		"orchestrator.picker",
+		"orchestrator.editor",
+		"orchestrator.terminal",
+	}
+	for _, mod in ipairs(modules) do
+		package.loaded[mod] = nil
+	end
+
+	-- 5. Reset plugin guard
+	vim.g.loaded_orchestrator = 0
+
+	-- 6. Re-require and setup
+	local ok, orchestrator = pcall(require, "orchestrator")
+	if not ok then
+		vim.notify("Orchestrator reload failed: " .. tostring(orchestrator), vim.log.levels.ERROR)
+		return
+	end
+	orchestrator.setup()
+
+	-- 7. Restore instance state
+	local new_state = require("orchestrator.state")
+	new_state.state.claude_instances = saved_instances
+	new_state.state.next_color_idx = saved_color_idx
+	new_state.state.last_active_buf = saved_last_active
+	new_state.state.status_bar.visible = saved_status_bar_visible
+
+	-- 8. Refresh status bar if instances exist and was visible
+	if #saved_instances > 0 and saved_status_bar_visible then
+		require("orchestrator.status_bar").show()
+	end
+
+	vim.notify("Orchestrator reloaded (" .. #saved_instances .. " instances preserved)", vim.log.levels.INFO)
+end
+
+-- ============================================================
+-- TEARDOWN: Cleanup
+-- ============================================================
+
+--- Teardown function for testing and cleanup
+function M.teardown()
+	cleanup_ui()
+	state.reset()
+	cleanup_commands()
 end
 
 return M
