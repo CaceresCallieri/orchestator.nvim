@@ -21,6 +21,45 @@ local config = {
 	bubble_right = "", -- U+E0B4 (right semicircle)
 }
 
+-- Padding constants for bubble content
+local ACTIVE_PADDING = 2 -- spaces on each side for active bubble
+local INACTIVE_PADDING = 1 -- spaces on each side for inactive bubbles
+
+--- Check if any Claude instance is currently active
+--- Mirrors the logic in render() to determine active state
+--- @return boolean has_active True if an instance is active
+local function has_active_instance()
+	local all_instances = instances.get_all()
+	if #all_instances == 0 then
+		return false
+	end
+
+	local current_win = vim.api.nvim_get_current_win()
+	if not vim.api.nvim_win_is_valid(current_win) then
+		return false
+	end
+
+	local current_buf = vim.api.nvim_win_get_buf(current_win)
+	local editor_is_focused = state.state.editor.buf
+		and vim.api.nvim_buf_is_valid(state.state.editor.buf)
+		and current_buf == state.state.editor.buf
+
+	for _, inst in ipairs(all_instances) do
+		if editor_is_focused then
+			local last_buf = state.state.last_active_buf
+			if last_buf and vim.api.nvim_buf_is_valid(last_buf) and inst.buf == last_buf then
+				return true
+			end
+		else
+			if inst.win and vim.api.nvim_win_is_valid(inst.win) and inst.win == current_win then
+				return true
+			end
+		end
+	end
+
+	return false
+end
+
 --- Calculate the content width based on number of instances
 --- Uses bubble format for active ( X ) and parentheses for inactive (X)
 --- @return number width Content width in display columns
@@ -30,11 +69,14 @@ local function calculate_content_width()
 		return 0
 	end
 
-	-- All agents use bubble format:  X
+	-- Base bubble width (narrow format)
 	local bubble_width = vim.fn.strdisplaywidth(config.bubble_left .. " 9 " .. config.bubble_right)
 
-	-- Each agent is a bubble + space between (except last)
-	local width = count * bubble_width + (count - 1)
+	-- Only add extra width if an instance is actually active
+	local active_extra = has_active_instance() and (ACTIVE_PADDING - INACTIVE_PADDING) * 2 or 0
+
+	-- Each agent is a bubble + space between (except last) + extra for active
+	local width = count * bubble_width + (count - 1) + active_extra
 
 	return width
 end
@@ -132,9 +174,10 @@ local function render(buf)
 				and inst.win == current_win
 		end
 
-		-- All agents use bubble format:  X
+		-- Bubble format: active gets wider padding for emphasis
 		local left_cap = config.bubble_left
-		local content = " " .. inst.number .. " "
+		local padding = string.rep(" ", is_active and ACTIVE_PADDING or INACTIVE_PADDING)
+		local content = padding .. inst.number .. padding
 		local right_cap = config.bubble_right
 
 		-- Add parts
