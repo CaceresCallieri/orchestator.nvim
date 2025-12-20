@@ -27,6 +27,16 @@ function M.set_send_function(fn)
 	send_to_terminal_fn = fn
 end
 
+-- Configuration (set by init.lua)
+---@type table
+local editor_config = {}
+
+--- Set the configuration (called from init.lua)
+--- @param cfg table The plugin configuration
+function M.set_config(cfg)
+	editor_config = cfg
+end
+
 -- ============================================================
 -- MULTI-TAB HELPER FUNCTIONS
 -- ============================================================
@@ -181,41 +191,74 @@ local function get_end_position(buf)
 	return line_count, last_col
 end
 
---- Set up buffer-local keybindings for sending
+--- Set up buffer-local keybindings for the prompt editor
+--- Keymaps are configurable via setup(opts).keymaps.prompt_editor
 --- @param buf number Buffer ID
 local function setup_buffer_keybindings(buf)
-	vim.keymap.set("n", "<leader><CR>", function()
+	-- Get keymap config, fallback to empty table if disabled
+	local km = editor_config.keymaps and editor_config.keymaps.prompt_editor
+	if km == false then
+		return -- All keymaps disabled
+	end
+	km = km or {}
+
+	--- Helper to set keymap if not disabled
+	--- @param modes string|table Mode(s) for the keymap
+	--- @param key string|false|nil Key binding (false or nil to disable)
+	--- @param action function Action to execute
+	--- @param desc string Description for which-key
+	local function map(modes, key, action, desc)
+		if key and key ~= false then
+			local ok, err = pcall(vim.keymap.set, modes, key, action, {
+				buffer = buf,
+				noremap = true,
+				silent = true,
+				desc = desc,
+			})
+			if not ok then
+				vim.notify(
+					string.format("orchestrator.nvim: Failed to set keymap '%s': %s", key, err),
+					vim.log.levels.WARN
+				)
+			end
+		end
+	end
+
+	-- Send prompt to Claude
+	map("n", km.send, function()
 		if send_to_terminal_fn then
 			send_to_terminal_fn()
 		end
-	end, {
-		buffer = buf,
-		noremap = true,
-		silent = true,
-		desc = "Send prompt to Claude",
-	})
+	end, "Send prompt to Claude")
 
-	vim.keymap.set("i", "<leader><CR>", function()
+	map("i", km.send, function()
 		vim.cmd("stopinsert")
 		if send_to_terminal_fn then
 			send_to_terminal_fn()
 		end
-	end, {
-		buffer = buf,
-		noremap = true,
-		silent = true,
-		desc = "Send prompt to Claude",
-	})
+	end, "Send prompt to Claude")
 
-	-- Close editor with Escape in normal mode
-	vim.keymap.set("n", "<Esc>", function()
+	-- Close editor (normal mode only)
+	map("n", km.close, function()
 		M.close()
-	end, {
-		buffer = buf,
-		noremap = true,
-		silent = true,
-		desc = "Close prompt editor",
-	})
+	end, "Close prompt editor")
+
+	-- Tab navigation
+	map({ "n", "i" }, km.next_tab, function()
+		M.next_tab()
+	end, "Next prompt tab")
+
+	map({ "n", "i" }, km.prev_tab, function()
+		M.prev_tab()
+	end, "Previous prompt tab")
+
+	map({ "n", "i" }, km.new_tab, function()
+		M.new_tab()
+	end, "New prompt tab")
+
+	map({ "n", "i" }, km.delete_tab, function()
+		M.delete_tab()
+	end, "Delete prompt tab")
 end
 
 --- Open the floating prompt editor

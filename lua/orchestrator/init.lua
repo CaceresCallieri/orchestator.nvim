@@ -5,6 +5,33 @@
 ---@class OrchestratorModule
 local M = {}
 
+-- ============================================================
+-- CONFIGURATION
+-- ============================================================
+
+--- Default configuration
+--- @type table
+local default_config = {
+	keymaps = {
+		-- Buffer-local keymaps for prompt editor (set to false to disable)
+		-- NOTE: <C-Tab> and <C-S-Tab> require terminal support for modified keys.
+		-- If these don't work in your terminal, configure custom keymaps via setup()
+		-- or use the <Plug>(OrchestratorXxx) mappings directly.
+		prompt_editor = {
+			send = "<leader><CR>", -- Send prompt to Claude
+			close = "<Esc>", -- Close editor (normal mode)
+			next_tab = "<C-Tab>", -- Next prompt tab
+			prev_tab = "<C-S-Tab>", -- Previous prompt tab
+			new_tab = "<C-S-n>", -- New prompt tab
+			delete_tab = "<C-S-x>", -- Delete current tab
+		},
+	},
+}
+
+--- Active configuration (merged with user opts)
+--- @type table
+local config = {}
+
 -- Load sub-modules
 local state = require("orchestrator.state")
 local highlights = require("orchestrator.highlights")
@@ -397,11 +424,91 @@ local function setup_user_commands()
 end
 
 -- ============================================================
+-- SETUP: <Plug> Mappings
+-- ============================================================
+
+--- Create <Plug> mappings for user customization
+--- These are global function references that users can map to their preferred keys
+local function setup_plug_mappings()
+	-- Prompt editor actions
+	vim.keymap.set({ "n", "i" }, "<Plug>(OrchestratorNextTab)", M.next_tab, { desc = "Next prompt tab" })
+	vim.keymap.set({ "n", "i" }, "<Plug>(OrchestratorPrevTab)", M.prev_tab, { desc = "Previous prompt tab" })
+	vim.keymap.set({ "n", "i" }, "<Plug>(OrchestratorNewTab)", M.new_tab, { desc = "New prompt tab" })
+	vim.keymap.set({ "n", "i" }, "<Plug>(OrchestratorDeleteTab)", M.delete_tab, { desc = "Delete prompt tab" })
+	vim.keymap.set({ "n", "i" }, "<Plug>(OrchestratorSend)", M.send_to_terminal, { desc = "Send prompt to Claude" })
+	vim.keymap.set("n", "<Plug>(OrchestratorClose)", M.close, { desc = "Close prompt editor" })
+	vim.keymap.set({ "n", "i", "t" }, "<Plug>(OrchestratorToggle)", M.toggle, { desc = "Toggle prompt editor" })
+
+	-- Agent actions
+	vim.keymap.set("n", "<Plug>(OrchestratorPick)", M.pick, { desc = "Pick/spawn Claude terminal" })
+	vim.keymap.set("n", "<Plug>(OrchestratorSpawn)", function()
+		M.spawn("fresh")
+	end, { desc = "Spawn new Claude terminal" })
+	vim.keymap.set("n", "<Plug>(OrchestratorSpawnResume)", function()
+		M.spawn("resume")
+	end, { desc = "Spawn Claude terminal (resume)" })
+	vim.keymap.set("n", "<Plug>(OrchestratorSpawnContinue)", function()
+		M.spawn("continue")
+	end, { desc = "Spawn Claude terminal (continue)" })
+end
+
+-- ============================================================
 -- SETUP: Main Entry Point
 -- ============================================================
 
+--- Validate configuration and warn about invalid values
+--- @param cfg table The merged configuration
+local function validate_config(cfg)
+	if not cfg.keymaps then
+		return
+	end
+
+	local km = cfg.keymaps.prompt_editor
+	if km == nil then
+		return -- nil is valid (will use defaults via fallback)
+	end
+
+	if km == false then
+		return -- false explicitly disables all keymaps
+	end
+
+	if type(km) ~= "table" then
+		vim.notify(
+			string.format(
+				"orchestrator.nvim: keymaps.prompt_editor must be a table or false, got %s. Using defaults.",
+				type(km)
+			),
+			vim.log.levels.WARN
+		)
+		cfg.keymaps.prompt_editor = default_config.keymaps.prompt_editor
+		return
+	end
+
+	-- Validate individual keymap values
+	for key, value in pairs(km) do
+		if value ~= false and type(value) ~= "string" then
+			vim.notify(
+				string.format(
+					"orchestrator.nvim: keymaps.prompt_editor.%s must be a string or false, got %s. Ignoring.",
+					key,
+					type(value)
+				),
+				vim.log.levels.WARN
+			)
+			km[key] = nil -- Will fall back to default
+		end
+	end
+end
+
 --- Setup function to initialize the plugin
-function M.setup()
+--- @param opts table|nil User configuration options
+function M.setup(opts)
+	-- Merge user config with defaults
+	config = vim.tbl_deep_extend("force", default_config, opts or {})
+
+	-- Validate user configuration
+	validate_config(config)
+
 	highlights.setup()
 
 	-- Wire up module dependencies (break circular references)
@@ -409,7 +516,9 @@ function M.setup()
 	terminal.set_instances(instances)
 	picker.set_terminal(terminal)
 	editor.set_send_function(M.send_to_terminal)
+	editor.set_config(config)
 
+	setup_plug_mappings()
 	setup_terminal_autocmds()
 	setup_user_commands()
 end
