@@ -60,6 +60,7 @@ local function get_current_buffer()
 end
 
 --- Generate a unique tab name (fills gaps in numbering)
+--- Checks both the tabs array AND existing Neovim buffers to avoid E95 conflicts
 --- @return string name The generated name like "prompt-1"
 local function generate_tab_name()
 	local used_numbers = {}
@@ -71,7 +72,7 @@ local function generate_tab_name()
 	end
 
 	local n = 1
-	while used_numbers[n] do
+	while used_numbers[n] or vim.fn.bufexists("prompt-" .. n) == 1 do
 		n = n + 1
 	end
 	return "prompt-" .. n

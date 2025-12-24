@@ -25,6 +25,23 @@ local config = {
 local ACTIVE_PADDING = 2 -- spaces on each side for active bubble
 local INACTIVE_PADDING = 1 -- spaces on each side for inactive bubbles
 
+--- Check if the current window is a Claude terminal window
+--- @return boolean is_claude_win True if current window is a Claude terminal
+local function is_in_claude_terminal()
+	local current_win = vim.api.nvim_get_current_win()
+	if not vim.api.nvim_win_is_valid(current_win) then
+		return false
+	end
+
+	for _, inst in ipairs(instances.get_all()) do
+		if inst.win and vim.api.nvim_win_is_valid(inst.win) and inst.win == current_win then
+			return true
+		end
+	end
+
+	return false
+end
+
 --- Check if any Claude instance is currently active
 --- Mirrors the logic in render() to determine active state
 --- @return boolean has_active True if an instance is active
@@ -39,19 +56,19 @@ local function has_active_instance()
 		return false
 	end
 
-	local current_buf = vim.api.nvim_win_get_buf(current_win)
-	local editor_is_focused = state.state.editor.buf
-		and vim.api.nvim_buf_is_valid(state.state.editor.buf)
-		and current_buf == state.state.editor.buf
+	-- Check if we're in a Claude terminal window
+	local in_claude_terminal = is_in_claude_terminal()
 
 	for _, inst in ipairs(all_instances) do
-		if editor_is_focused then
-			local last_buf = state.state.last_active_buf
-			if last_buf and vim.api.nvim_buf_is_valid(last_buf) and inst.buf == last_buf then
+		if in_claude_terminal then
+			-- In a Claude terminal: that terminal is active
+			if inst.win and vim.api.nvim_win_is_valid(inst.win) and inst.win == current_win then
 				return true
 			end
 		else
-			if inst.win and vim.api.nvim_win_is_valid(inst.win) and inst.win == current_win then
+			-- In any other window (editor, picker, floating, normal): use last_active_buf
+			local last_buf = state.state.last_active_buf
+			if last_buf and vim.api.nvim_buf_is_valid(last_buf) and inst.buf == last_buf then
 				return true
 			end
 		end
@@ -142,14 +159,9 @@ local function render(buf)
 		return
 	end
 
-	-- Check if the Prompt Editor is currently focused
-	-- When focused, use last_active_buf to determine which Claude instance is "contextually active"
-	-- NOTE: We check the BUFFER, not the window, because the window ID isn't set until after
-	-- nvim_open_win returns, but the WinEnter autocmd fires during nvim_open_win
-	local current_buf = vim.api.nvim_win_get_buf(current_win)
-	local editor_is_focused = state.state.editor.buf
-		and vim.api.nvim_buf_is_valid(state.state.editor.buf)
-		and current_buf == state.state.editor.buf
+	-- Check if we're currently in a Claude terminal window
+	-- If not (editor, picker, any floating window, or normal window), use last_active_buf
+	local in_claude_terminal = is_in_claude_terminal()
 
 	local win_opts = get_position()
 
@@ -160,18 +172,17 @@ local function render(buf)
 
 	for i, inst in ipairs(all_instances) do
 		local is_active
-		if editor_is_focused then
-			-- When editor is focused, match by last_active_buf instead of window
-			-- Validate that last_active_buf is still valid before using it
+		if in_claude_terminal then
+			-- In a Claude terminal: that terminal is active
+			is_active = inst.win
+				and vim.api.nvim_win_is_valid(inst.win)
+				and inst.win == current_win
+		else
+			-- In any other window: use last_active_buf to show contextually active instance
 			local last_buf = state.state.last_active_buf
 			is_active = last_buf
 				and vim.api.nvim_buf_is_valid(last_buf)
 				and inst.buf == last_buf
-		else
-			-- Normal case: match by window
-			is_active = inst.win
-				and vim.api.nvim_win_is_valid(inst.win)
-				and inst.win == current_win
 		end
 
 		-- Bubble format: active gets wider padding for emphasis

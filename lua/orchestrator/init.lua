@@ -284,7 +284,7 @@ local function setup_terminal_autocmds()
 	-- Focus changed: update status bar to show active instance indicator
 	-- WinEnter: fires when switching windows (split navigation)
 	-- BufEnter: fires when switching buffers in same window (<C-6>, :bnext, etc.)
-	-- Filtering prevents excessive updates - only triggers for Claude buffers
+	-- Updates when entering/leaving Claude terminals or any floating window
 	vim.api.nvim_create_autocmd({ "WinEnter", "BufEnter" }, {
 		group = augroup,
 		callback = function()
@@ -293,18 +293,25 @@ local function setup_terminal_autocmds()
 			end
 
 			local current_buf = vim.api.nvim_get_current_buf()
+			local current_win = vim.api.nvim_get_current_win()
 			local prev_buf = vim.fn.bufnr("#")
 
-			-- Only update if entering or leaving a Claude terminal
+			-- Check if entering/leaving a Claude terminal
 			local current_is_claude = instances.get_by_buf(current_buf) ~= nil
 			local prev_is_claude = prev_buf > 0 and instances.get_by_buf(prev_buf) ~= nil
+
+			-- Check if entering a floating window (editor, picker, telescope, etc.)
+			-- Floating windows have a non-empty 'relative' config
+			local win_config = vim.api.nvim_win_get_config(current_win)
+			local is_floating = win_config.relative and win_config.relative ~= ""
 
 			-- Track last active Claude instance for picker prioritization
 			if current_is_claude then
 				state.state.last_active_buf = current_buf
 			end
 
-			if current_is_claude or prev_is_claude then
+			-- Update status bar when entering/leaving Claude terminals or any floating window
+			if current_is_claude or prev_is_claude or is_floating then
 				status_bar.update()
 			end
 		end,
