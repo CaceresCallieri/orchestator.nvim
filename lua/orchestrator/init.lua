@@ -201,7 +201,14 @@ end
 
 --- Send prompt to Claude Code terminal
 --- Shows picker if multiple instances or spawn options
+--- Only works when called from inside the prompt editor
 function M.send_to_terminal()
+	-- Guard: Only allow sending from inside the prompt editor
+	if not editor.is_current_buffer_prompt() then
+		vim.notify("Send prompt only works inside the Prompt Editor", vim.log.levels.WARN)
+		return
+	end
+
 	local content = editor.get_content()
 
 	if not content then

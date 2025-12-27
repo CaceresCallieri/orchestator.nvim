@@ -531,4 +531,16 @@ function M.current_tab_index()
 	return state.state.editor.current_tab_idx
 end
 
+--- Check if the current buffer is a prompt editor buffer
+--- @return boolean
+function M.is_current_buffer_prompt()
+	local current_buf = vim.api.nvim_get_current_buf()
+	for _, tab in ipairs(state.state.editor.tabs) do
+		if tab.buf == current_buf then
+			return true
+		end
+	end
+	return false
+end
+
 return M
