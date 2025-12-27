@@ -56,21 +56,15 @@ local function has_active_instance()
 		return false
 	end
 
-	-- Check if we're in a Claude terminal window
-	local in_claude_terminal = is_in_claude_terminal()
+	-- Only show active indicator when inside a Claude terminal
+	if not is_in_claude_terminal() then
+		return false
+	end
 
+	-- Check if current window matches any Claude instance
 	for _, inst in ipairs(all_instances) do
-		if in_claude_terminal then
-			-- In a Claude terminal: that terminal is active
-			if inst.win and vim.api.nvim_win_is_valid(inst.win) and inst.win == current_win then
-				return true
-			end
-		else
-			-- In any other window (editor, picker, floating, normal): use last_active_buf
-			local last_buf = state.state.last_active_buf
-			if last_buf and vim.api.nvim_buf_is_valid(last_buf) and inst.buf == last_buf then
-				return true
-			end
+		if inst.win and vim.api.nvim_win_is_valid(inst.win) and inst.win == current_win then
+			return true
 		end
 	end
 
@@ -160,7 +154,6 @@ local function render(buf)
 	end
 
 	-- Check if we're currently in a Claude terminal window
-	-- If not (editor, picker, any floating window, or normal window), use last_active_buf
 	local in_claude_terminal = is_in_claude_terminal()
 
 	local win_opts = get_position()
@@ -171,19 +164,11 @@ local function render(buf)
 	local byte_offset = 0 -- Track byte position for extmarks
 
 	for i, inst in ipairs(all_instances) do
-		local is_active
-		if in_claude_terminal then
-			-- In a Claude terminal: that terminal is active
-			is_active = inst.win
-				and vim.api.nvim_win_is_valid(inst.win)
-				and inst.win == current_win
-		else
-			-- In any other window: use last_active_buf to show contextually active instance
-			local last_buf = state.state.last_active_buf
-			is_active = last_buf
-				and vim.api.nvim_buf_is_valid(last_buf)
-				and inst.buf == last_buf
-		end
+		-- Only mark as active when inside a Claude terminal that matches this instance
+		local is_active = in_claude_terminal
+			and inst.win
+			and vim.api.nvim_win_is_valid(inst.win)
+			and inst.win == current_win
 
 		-- Bubble format: active gets wider padding for emphasis
 		local left_cap = config.bubble_left
