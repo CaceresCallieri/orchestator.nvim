@@ -44,6 +44,10 @@ local terminal = require("orchestrator.terminal")
 -- Create autocmd group
 local augroup = vim.api.nvim_create_augroup("Orchestrator", { clear = true })
 
+-- Debounce timer for terminal title updates
+local title_update_timer = nil
+local TITLE_DEBOUNCE_MS = 50
+
 -- ============================================================
 -- PUBLIC API: Editor Functions
 -- ============================================================
@@ -276,6 +280,32 @@ local function setup_terminal_autocmds()
 				if instances.get_by_buf(args.buf) then
 					instances.unregister(args.buf)
 				end
+			end)
+		end,
+	})
+
+	-- Terminal title changed: update status bar to show session name
+	-- TermRequest fires when terminal sends OSC/DCS escape sequences
+	-- Neovim updates vim.b.term_title from OSC 2 before this fires
+	-- Debounced to prevent flicker during rapid title updates (e.g., Claude streaming)
+	vim.api.nvim_create_autocmd("TermRequest", {
+		group = augroup,
+		callback = function(args)
+			-- Only process if it's a tracked Claude terminal
+			if not instances.get_by_buf(args.buf) then
+				return
+			end
+
+			-- Debounce: cancel pending update and schedule new one
+			if title_update_timer then
+				vim.fn.timer_stop(title_update_timer)
+			end
+
+			title_update_timer = vim.fn.timer_start(TITLE_DEBOUNCE_MS, function()
+				vim.schedule(function()
+					status_bar.update()
+					title_update_timer = nil
+				end)
 			end)
 		end,
 	})

@@ -19,11 +19,21 @@ local config = {
 	-- Bubble effect separators (powerline rounded symbols)
 	bubble_left = "", -- U+E0B6 (left semicircle)
 	bubble_right = "", -- U+E0B4 (right semicircle)
+	-- Title display settings
+	title = {
+		max_length = 32, -- Maximum characters before truncation
+		ellipsis = "…", -- Truncation indicator (U+2026)
+		separator = " │ ", -- Between number and title (U+2502 thin vertical bar)
+		fallback = nil, -- Show when no title available (nil = number only)
+	},
 }
 
 -- Padding constants for bubble content
 local ACTIVE_PADDING = 2 -- spaces on each side for active bubble
 local INACTIVE_PADDING = 1 -- spaces on each side for inactive bubbles
+
+-- Shell names to filter out (before Claude sets actual title)
+local SHELL_NAMES = { "zsh", "bash", "fish", "sh", "dash", "ksh", "tcsh", "csh" }
 
 --- Check if the current window is a Claude terminal window
 --- @return boolean is_claude_win True if current window is a Claude terminal
@@ -40,6 +50,18 @@ local function is_in_claude_terminal()
 	end
 
 	return false
+end
+
+--- Check if a specific instance is currently active
+--- @param inst table Instance object with win field
+--- @param in_claude boolean Whether currently in a Claude terminal
+--- @param current_win number Current window ID
+--- @return boolean is_active True if this instance is active
+local function is_instance_active(inst, in_claude, current_win)
+	return in_claude
+		and inst.win
+		and vim.api.nvim_win_is_valid(inst.win)
+		and inst.win == current_win
 end
 
 --- Check if any Claude instance is currently active
@@ -71,32 +93,123 @@ local function has_active_instance()
 	return false
 end
 
---- Calculate the content width based on number of instances
---- Uses bubble format for active ( X ) and parentheses for inactive (X)
+--- Get and truncate the session title for an instance
+--- Reads vim.b.term_title at render time (Neovim maintains this via OSC 2)
+--- @param buf number Terminal buffer ID
+--- @return string|nil title The formatted title or nil if unavailable
+local function get_instance_title(buf)
+	-- Guard: validate buffer
+	if not buf or not vim.api.nvim_buf_is_valid(buf) then
+		return nil
+	end
+
+	-- Read term_title - Neovim populates this from OSC 2 sequences
+	local ok, title = pcall(vim.api.nvim_buf_get_var, buf, "term_title")
+	if not ok or not title or title == "" then
+		return nil
+	end
+
+	-- Filter out non-title values:
+	-- 1. Neovim terminal buffer names (term://path/to/dir//cmd)
+	-- 2. Common shell names or paths (before Claude sets the actual title)
+	if title:match("^term://") then
+		return nil
+	end
+	-- Match shell names as exact match or as basename of path (e.g., /bin/zsh)
+	local basename = title:match("([^/]+)$") or title
+	for _, shell in ipairs(SHELL_NAMES) do
+		if basename == shell then
+			return nil
+		end
+	end
+
+	-- Truncate if needed (with proper UTF-8 handling)
+	local display_width = vim.fn.strdisplaywidth(title)
+	if display_width > config.title.max_length then
+		local truncated = ""
+		local width = 0
+		-- UTF-8 aware iteration: matches single-byte ASCII or multi-byte sequences
+		for char in title:gmatch("[%z\1-\127\194-\244][\128-\191]*") do
+			local char_width = vim.fn.strdisplaywidth(char)
+			if width + char_width + vim.fn.strdisplaywidth(config.title.ellipsis) > config.title.max_length then
+				break
+			end
+			truncated = truncated .. char
+			width = width + char_width
+		end
+		return truncated .. config.title.ellipsis
+	end
+
+	return title
+end
+
+--- Calculate the content width based on number of instances and their titles
+--- Iterates through instances to sum variable widths (titles vary in length)
+--- @param all_instances table Array of instance objects
+--- @param title_cache table Map of buf -> title (cached lookups)
 --- @return number width Content width in display columns
-local function calculate_content_width()
-	local count = instances.count()
+local function calculate_content_width(all_instances, title_cache)
+	local count = #all_instances
 	if count == 0 then
 		return 0
 	end
 
-	-- Base bubble width (narrow format)
-	local bubble_width = vim.fn.strdisplaywidth(config.bubble_left .. " 9 " .. config.bubble_right)
+	local current_win = vim.api.nvim_get_current_win()
+	local in_claude = is_in_claude_terminal()
+	local total_width = 0
 
-	-- Only add extra width if an instance is actually active
-	local active_extra = has_active_instance() and (ACTIVE_PADDING - INACTIVE_PADDING) * 2 or 0
+	for i, inst in ipairs(all_instances) do
+		-- Determine if this instance is active (for padding calculation)
+		local is_active = is_instance_active(inst, in_claude, current_win)
+		local padding_size = is_active and ACTIVE_PADDING or INACTIVE_PADDING
 
-	-- Each agent is a bubble + space between (except last) + extra for active
-	local width = count * bubble_width + (count - 1) + active_extra
+		-- Calculate bubble content width: padding + number + (separator + title)? + padding
+		local content_width = padding_size -- left padding
+		content_width = content_width + vim.fn.strdisplaywidth(tostring(inst.number))
 
-	return width
+		local title = title_cache[inst.buf]
+		if title then
+			content_width = content_width + vim.fn.strdisplaywidth(config.title.separator)
+			content_width = content_width + vim.fn.strdisplaywidth(title)
+		elseif config.title.fallback then
+			content_width = content_width + vim.fn.strdisplaywidth(config.title.separator)
+			content_width = content_width + vim.fn.strdisplaywidth(config.title.fallback)
+		end
+
+		content_width = content_width + padding_size -- right padding
+
+		-- Add bubble caps
+		content_width = content_width + vim.fn.strdisplaywidth(config.bubble_left)
+		content_width = content_width + vim.fn.strdisplaywidth(config.bubble_right)
+
+		total_width = total_width + content_width
+
+		-- Add space between bubbles
+		if i < count then
+			total_width = total_width + 1
+		end
+	end
+
+	return total_width
 end
 
 --- Get window position for status bar
 --- Positioned just above lualine
+--- @param all_instances? table Array of instance objects (optional, fetched if nil)
+--- @param title_cache? table Map of buf -> title (optional, built if nil)
 --- @return table win_opts Window configuration
-local function get_position()
-	local content_width = calculate_content_width()
+local function get_position(all_instances, title_cache)
+	-- Fallback: fetch instances and build cache if not provided
+	if not all_instances then
+		all_instances = instances.get_all()
+	end
+	if not title_cache then
+		title_cache = {}
+		for _, inst in ipairs(all_instances) do
+			title_cache[inst.buf] = get_instance_title(inst.buf)
+		end
+	end
+	local content_width = calculate_content_width(all_instances, title_cache)
 	local max_width = math.floor(vim.o.columns * config.max_width_ratio)
 	local width = math.max(config.min_width, math.min(content_width + config.padding, max_width))
 
@@ -145,6 +258,12 @@ local function render(buf)
 		return
 	end
 
+	-- Cache titles once for both width calculation and rendering
+	local title_cache = {}
+	for _, inst in ipairs(all_instances) do
+		title_cache[inst.buf] = get_instance_title(inst.buf)
+	end
+
 	-- Detect active instance (the one in the current window)
 	local current_win = vim.api.nvim_get_current_win()
 
@@ -156,7 +275,7 @@ local function render(buf)
 	-- Check if we're currently in a Claude terminal window
 	local in_claude_terminal = is_in_claude_terminal()
 
-	local win_opts = get_position()
+	local win_opts = get_position(all_instances, title_cache)
 
 	-- Build parts and track highlight regions
 	local parts = {}
@@ -165,15 +284,25 @@ local function render(buf)
 
 	for i, inst in ipairs(all_instances) do
 		-- Only mark as active when inside a Claude terminal that matches this instance
-		local is_active = in_claude_terminal
-			and inst.win
-			and vim.api.nvim_win_is_valid(inst.win)
-			and inst.win == current_win
+		local is_active = is_instance_active(inst, in_claude_terminal, current_win)
 
 		-- Bubble format: active gets wider padding for emphasis
 		local left_cap = config.bubble_left
 		local padding = string.rep(" ", is_active and ACTIVE_PADDING or INACTIVE_PADDING)
-		local content = padding .. inst.number .. padding
+
+		-- Build content: number + (separator + title)?
+		local number_str = tostring(inst.number)
+		local title = title_cache[inst.buf]
+		local content
+
+		if title then
+			content = padding .. number_str .. config.title.separator .. title .. padding
+		elseif config.title.fallback then
+			content = padding .. number_str .. config.title.separator .. config.title.fallback .. padding
+		else
+			content = padding .. number_str .. padding
+		end
+
 		local right_cap = config.bubble_right
 
 		-- Add parts
