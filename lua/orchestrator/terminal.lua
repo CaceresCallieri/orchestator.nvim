@@ -59,14 +59,16 @@ end
 --- Spawn a new Claude terminal
 --- Creates buffer, opens terminal with specified variant, registers instance
 --- @param spawn_type string|nil "fresh" | "resume" | "continue" (defaults to "fresh")
+--- @param opts table|nil Options { dangerous = boolean }
 --- @return table|nil instance The created instance, or nil on failure
-function M.spawn(spawn_type)
+function M.spawn(spawn_type, opts)
 	-- Fail fast if dependencies aren't wired up
 	if not instances then
 		error("terminal.lua: instances module not initialized. Call set_instances() in setup.")
 	end
 
 	spawn_type = spawn_type or "fresh"
+	opts = opts or {}
 
 	if not M.is_valid_spawn_type(spawn_type) then
 		vim.notify("Unknown spawn type: " .. tostring(spawn_type), vim.log.levels.ERROR)
@@ -74,6 +76,20 @@ function M.spawn(spawn_type)
 	end
 
 	local cmd_config = M.spawn_types[spawn_type]
+
+	-- Build the command, optionally adding dangerous mode flag
+	-- Flag must come after 'claude' but before action flags (-r, -c)
+	local cmd
+	if opts.dangerous then
+		cmd = "claude --dangerously-skip-permissions"
+		-- Append action flags if present (e.g., -r, -c)
+		local action_flags = cmd_config.cmd:match("^claude%s*(.*)")
+		if action_flags and action_flags ~= "" then
+			cmd = cmd .. " " .. action_flags
+		end
+	else
+		cmd = cmd_config.cmd
+	end
 
 	-- Verify CLI is installed before attempting to spawn
 	local cmd_name = cmd_config.cmd:match("^%S+")
@@ -94,7 +110,7 @@ function M.spawn(spawn_type)
 	vim.api.nvim_set_current_buf(buf)
 
 	-- Spawn terminal with Claude command
-	local job_id = vim.fn.termopen(cmd_config.cmd, {
+	local job_id = vim.fn.termopen(cmd, {
 		cwd = cwd,
 		on_exit = function(_, exit_code, _)
 			vim.schedule(function()
@@ -117,7 +133,7 @@ function M.spawn(spawn_type)
 
 	vim.cmd("startinsert")
 
-	return instances.register_spawned(buf, job_id, cwd, spawn_type)
+	return instances.register_spawned(buf, job_id, cwd, spawn_type, opts.dangerous)
 end
 
 --- Focus an existing Claude terminal

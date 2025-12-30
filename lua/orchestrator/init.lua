@@ -132,9 +132,10 @@ end
 
 --- Spawn a new Claude terminal
 --- @param spawn_type string|nil "fresh" (default), "resume", or "continue"
+--- @param opts table|nil Options { dangerous = boolean }
 --- @return table|nil instance The spawned instance
-function M.spawn(spawn_type)
-	return terminal.spawn(spawn_type or "fresh")
+function M.spawn(spawn_type, opts)
+	return terminal.spawn(spawn_type or "fresh", opts)
 end
 
 --- Show unified picker to spawn or select Claude terminal
@@ -395,10 +396,12 @@ local function setup_user_commands()
 
 	vim.api.nvim_create_user_command("AgentsSpawn", function(opts)
 		local spawn_type = opts.args ~= "" and opts.args or "fresh"
-		M.spawn(spawn_type)
+		local dangerous = opts.bang
+		M.spawn(spawn_type, { dangerous = dangerous })
 	end, {
-		desc = "Spawn new Claude terminal",
+		desc = "Spawn new Claude terminal (use ! for dangerous mode)",
 		nargs = "?",
+		bang = true,
 		complete = function()
 			return { "fresh", "resume", "continue" }
 		end,
@@ -494,6 +497,17 @@ local function setup_plug_mappings()
 	vim.keymap.set("n", "<Plug>(OrchestratorSpawnContinue)", function()
 		M.spawn("continue")
 	end, { desc = "Spawn Claude terminal (continue)" })
+
+	-- Dangerous mode variants (--dangerously-skip-permissions)
+	vim.keymap.set("n", "<Plug>(OrchestratorSpawnDangerous)", function()
+		M.spawn("fresh", { dangerous = true })
+	end, { desc = "Spawn new Claude terminal (dangerous mode)" })
+	vim.keymap.set("n", "<Plug>(OrchestratorSpawnResumeDangerous)", function()
+		M.spawn("resume", { dangerous = true })
+	end, { desc = "Spawn Claude terminal (resume, dangerous mode)" })
+	vim.keymap.set("n", "<Plug>(OrchestratorSpawnContinueDangerous)", function()
+		M.spawn("continue", { dangerous = true })
+	end, { desc = "Spawn Claude terminal (continue, dangerous mode)" })
 end
 
 -- ============================================================

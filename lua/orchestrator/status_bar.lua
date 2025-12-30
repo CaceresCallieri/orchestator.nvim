@@ -32,6 +32,9 @@ local config = {
 local ACTIVE_PADDING = 2 -- spaces on each side for active bubble
 local INACTIVE_PADDING = 1 -- spaces on each side for inactive bubbles
 
+-- Dangerous mode indicator (warning sign U+26A0)
+local DANGER_INDICATOR = "⚠ "
+
 -- Shell names to filter out (before Claude sets actual title)
 local SHELL_NAMES = { "zsh", "bash", "fish", "sh", "dash", "ksh", "tcsh", "csh" }
 
@@ -163,8 +166,11 @@ local function calculate_content_width(all_instances, title_cache)
 		local is_active = is_instance_active(inst, in_claude, current_win)
 		local padding_size = is_active and ACTIVE_PADDING or INACTIVE_PADDING
 
-		-- Calculate bubble content width: padding + number + (separator + title)? + padding
+		-- Calculate bubble content width: padding + (danger?)+ number + (separator + title)? + padding
 		local content_width = padding_size -- left padding
+		if inst.dangerous then
+			content_width = content_width + vim.fn.strdisplaywidth(DANGER_INDICATOR)
+		end
 		content_width = content_width + vim.fn.strdisplaywidth(tostring(inst.number))
 
 		local title = title_cache[inst.buf]
@@ -290,17 +296,18 @@ local function render(buf)
 		local left_cap = config.bubble_left
 		local padding = string.rep(" ", is_active and ACTIVE_PADDING or INACTIVE_PADDING)
 
-		-- Build content: number + (separator + title)?
+		-- Build content: (danger?) + number + (separator + title)?
+		local danger_prefix = inst.dangerous and DANGER_INDICATOR or ""
 		local number_str = tostring(inst.number)
 		local title = title_cache[inst.buf]
 		local content
 
 		if title then
-			content = padding .. number_str .. config.title.separator .. title .. padding
+			content = padding .. danger_prefix .. number_str .. config.title.separator .. title .. padding
 		elseif config.title.fallback then
-			content = padding .. number_str .. config.title.separator .. config.title.fallback .. padding
+			content = padding .. danger_prefix .. number_str .. config.title.separator .. config.title.fallback .. padding
 		else
-			content = padding .. number_str .. padding
+			content = padding .. danger_prefix .. number_str .. padding
 		end
 
 		local right_cap = config.bubble_right
