@@ -41,7 +41,7 @@ local MAX_INSTANCES = 8
 --- @param job_id number Terminal job ID
 --- @param cwd string Working directory at spawn time
 --- @param spawn_type string "fresh" | "resume" | "continue"
---- @param dangerous boolean|nil Whether instance was spawned with --dangerously-skip-permissions
+--- @param dangerous boolean|nil Whether instance was spawned with --dangerously-skip-permissions (nil treated as false)
 --- @return table instance The registered instance
 function M.register_spawned(buf, job_id, cwd, spawn_type, dangerous)
 	-- Check if already registered (prevent duplicates)

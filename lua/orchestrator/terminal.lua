@@ -21,20 +21,21 @@ function M.set_instances(inst)
 end
 
 -- CLI command configurations for different spawn types
----@type table<string, {cmd: string, label: string, description: string}>
+-- Stores flags separately for cleaner command construction
+---@type table<string, {flags: string[], label: string, description: string}>
 M.spawn_types = {
 	fresh = {
-		cmd = "claude",
+		flags = {},
 		label = "New Claude",
 		description = "Start fresh conversation",
 	},
 	resume = {
-		cmd = "claude -r",
+		flags = { "-r" },
 		label = "Resume Claude",
 		description = "Resume last conversation",
 	},
 	continue = {
-		cmd = "claude -c",
+		flags = { "-c" },
 		label = "Continue Claude",
 		description = "Continue conversation",
 	},
@@ -77,25 +78,20 @@ function M.spawn(spawn_type, opts)
 
 	local cmd_config = M.spawn_types[spawn_type]
 
-	-- Build the command, optionally adding dangerous mode flag
-	-- Flag must come after 'claude' but before action flags (-r, -c)
-	local cmd
+	-- Build command from parts: claude [--dangerously-skip-permissions] [action-flags]
+	local cmd_parts = { "claude" }
 	if opts.dangerous then
-		cmd = "claude --dangerously-skip-permissions"
-		-- Append action flags if present (e.g., -r, -c)
-		local action_flags = cmd_config.cmd:match("^claude%s*(.*)")
-		if action_flags and action_flags ~= "" then
-			cmd = cmd .. " " .. action_flags
-		end
-	else
-		cmd = cmd_config.cmd
+		table.insert(cmd_parts, "--dangerously-skip-permissions")
 	end
+	for _, flag in ipairs(cmd_config.flags) do
+		table.insert(cmd_parts, flag)
+	end
+	local cmd = table.concat(cmd_parts, " ")
 
 	-- Verify CLI is installed before attempting to spawn
-	local cmd_name = cmd_config.cmd:match("^%S+")
-	if vim.fn.executable(cmd_name) == 0 then
+	if vim.fn.executable("claude") == 0 then
 		vim.notify(
-			string.format("Command '%s' not found. Is Claude CLI installed?", cmd_name),
+			"Command 'claude' not found. Is Claude CLI installed?",
 			vim.log.levels.ERROR
 		)
 		return nil

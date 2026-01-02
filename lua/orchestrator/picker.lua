@@ -79,12 +79,14 @@ function M.select(callback)
 		elseif inst.spawn_type == "continue" then
 			spawn_label = " [continued]"
 		end
+		local danger_prefix = inst.dangerous and "⚠ " or ""
 
 		table.insert(items, {
 			type = "existing",
 			instance = inst,
 			display = string.format(
-				"[%d] Claude (%s)%s - %s",
+				"%s[%d] Claude (%s)%s - %s",
+				danger_prefix,
 				inst.number,
 				highlights.get_color_name(inst.color_idx),
 				spawn_label,
@@ -151,10 +153,12 @@ function M.select_existing(callback)
 	local items = {}
 	for _, inst in ipairs(project_instances) do
 		local time_ago = format_time_ago(inst.spawned_at)
+		local danger_prefix = inst.dangerous and "⚠ " or ""
 		table.insert(items, {
 			instance = inst,
 			display = string.format(
-				"[%d] Claude (%s) - %s",
+				"%s[%d] Claude (%s) - %s",
+				danger_prefix,
 				inst.number,
 				highlights.get_color_name(inst.color_idx),
 				time_ago

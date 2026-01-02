@@ -26,6 +26,11 @@ local default_config = {
 			delete_tab = "<C-S-x>", -- Delete current tab
 		},
 	},
+	-- Dangerous mode configuration (--dangerously-skip-permissions)
+	dangerous_mode = {
+		enabled = true, -- Set to false to completely disable dangerous mode
+		require_confirmation = false, -- Prompt user before spawning in dangerous mode
+	},
 }
 
 --- Active configuration (merged with user opts)
@@ -135,6 +140,30 @@ end
 --- @param opts table|nil Options { dangerous = boolean }
 --- @return table|nil instance The spawned instance
 function M.spawn(spawn_type, opts)
+	opts = opts or {}
+
+	-- Check dangerous mode configuration
+	if opts.dangerous then
+		if not config.dangerous_mode.enabled then
+			vim.notify(
+				"Dangerous mode is disabled. Enable via setup({ dangerous_mode = { enabled = true } })",
+				vim.log.levels.ERROR
+			)
+			return nil
+		end
+
+		if config.dangerous_mode.require_confirmation then
+			local confirmed = vim.fn.confirm(
+				"Spawn Claude with --dangerously-skip-permissions?\n" .. "This bypasses all permission checks.",
+				"&Yes\n&No",
+				2 -- default to No
+			)
+			if confirmed ~= 1 then
+				return nil
+			end
+		end
+	end
+
 	return terminal.spawn(spawn_type or "fresh", opts)
 end
 
@@ -448,13 +477,14 @@ local function setup_user_commands()
 		print("Current cwd: " .. vim.fn.getcwd())
 		for i, inst in ipairs(all) do
 			print(string.format(
-				"  [%d] buf=%d, job_id=%d, color=%d, cwd=%s, type=%s",
+				"  [%d] buf=%d, job_id=%d, color=%d, cwd=%s, type=%s, dangerous=%s",
 				i,
 				inst.buf,
 				inst.job_id,
 				inst.color_idx,
 				inst.cwd,
-				inst.spawn_type
+				inst.spawn_type,
+				tostring(inst.dangerous or false)
 			))
 		end
 		print("Status bar visible: " .. tostring(state.state.status_bar.visible))
