@@ -88,11 +88,23 @@ function M.setup()
 			bold = true,
 		})
 
+		-- Active bubble cap: colored foreground on transparent (for powerline semicircles)
+		vim.api.nvim_set_hl(0, "OrchestratorClaude" .. i .. "ActiveCap", {
+			fg = color.fg,
+			bg = "NONE",
+		})
+
 		-- Inactive instance: dark text on dimmed colored background
 		vim.api.nvim_set_hl(0, "OrchestratorClaude" .. i .. "Dim", {
 			fg = M.colors.black,
 			bg = dimmed_fg,
 			bold = true,
+		})
+
+		-- Inactive bubble cap: dimmed foreground on transparent (for powerline semicircles)
+		vim.api.nvim_set_hl(0, "OrchestratorClaude" .. i .. "DimCap", {
+			fg = dimmed_fg,
+			bg = "NONE",
 		})
 
 		-- Simple colored text variant (used in picker, etc.)
@@ -116,6 +128,20 @@ end
 --- @return string highlight_group
 function M.get_instance_dim_highlight(color_idx)
 	return "OrchestratorClaude" .. color_idx .. "Dim"
+end
+
+--- Get highlight group name for active bubble cap (colored fg, transparent bg)
+--- @param color_idx number Color index (1-8)
+--- @return string highlight_group
+function M.get_instance_active_cap_highlight(color_idx)
+	return "OrchestratorClaude" .. color_idx .. "ActiveCap"
+end
+
+--- Get highlight group name for inactive bubble cap (dimmed fg, transparent bg)
+--- @param color_idx number Color index (1-8)
+--- @return string highlight_group
+function M.get_instance_dim_cap_highlight(color_idx)
+	return "OrchestratorClaude" .. color_idx .. "DimCap"
 end
 
 --- Get highlight group name for colored text (no background)

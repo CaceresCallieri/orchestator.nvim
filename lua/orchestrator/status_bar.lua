@@ -22,6 +22,11 @@ local config = {
 	instance_separator = "  ", -- Two spaces between instance segments
 }
 
+-- Bubble cap symbols (powerline semicircles)
+local BUBBLE_LEFT = "" -- U+E0B6 (left semicircle)
+local BUBBLE_RIGHT = "" -- U+E0B4 (right semicircle)
+
+
 -- Dangerous mode indicator (warning sign U+26A0)
 local DANGER_INDICATOR = "⚠ "
 
@@ -172,10 +177,13 @@ local function build_winbar_string()
 		-- Determine if this instance is active
 		local is_active = is_instance_active(inst, in_claude_terminal, current_win)
 
-		-- Select highlight group based on active state
-		local hl_group = is_active
+		-- Select highlight groups based on active state
+		local body_hl = is_active
 				and highlights.get_instance_active_highlight(inst.color_idx)
 			or highlights.get_instance_dim_highlight(inst.color_idx)
+		local cap_hl = is_active
+				and highlights.get_instance_active_cap_highlight(inst.color_idx)
+			or highlights.get_instance_dim_cap_highlight(inst.color_idx)
 
 		-- Build content: padding + (danger?) + number + (separator + title)? + padding
 		local danger_prefix = inst.dangerous and DANGER_INDICATOR or ""
@@ -191,8 +199,11 @@ local function build_winbar_string()
 			content = INSTANCE_PADDING .. danger_prefix .. number_str .. INSTANCE_PADDING
 		end
 
-		-- Add highlighted segment: %#HighlightGroup#content
-		table.insert(parts, string.format("%%#%s#%s", hl_group, content))
+		-- Add bubble: left_cap + content + right_cap
+		-- Caps use cap_hl (colored fg, transparent bg), body uses body_hl (dark fg, colored bg)
+		table.insert(parts, string.format("%%#%s#%s", cap_hl, BUBBLE_LEFT))
+		table.insert(parts, string.format("%%#%s#%s", body_hl, content))
+		table.insert(parts, string.format("%%#%s#%s", cap_hl, BUBBLE_RIGHT))
 
 		-- Add separator between instances (with winbar background)
 		if i < #all_instances then
