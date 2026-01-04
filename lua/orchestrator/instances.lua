@@ -41,8 +41,9 @@ local MAX_INSTANCES = 8
 --- @param job_id number Terminal job ID
 --- @param cwd string Working directory at spawn time
 --- @param spawn_type string "fresh" | "resume" | "continue"
+--- @param dangerous boolean|nil Whether instance was spawned with --dangerously-skip-permissions (nil treated as false)
 --- @return table instance The registered instance
-function M.register_spawned(buf, job_id, cwd, spawn_type)
+function M.register_spawned(buf, job_id, cwd, spawn_type, dangerous)
 	-- Check if already registered (prevent duplicates)
 	for _, inst in ipairs(state.state.claude_instances) do
 		if inst.buf == buf then
@@ -67,6 +68,7 @@ function M.register_spawned(buf, job_id, cwd, spawn_type)
 		cwd = cwd,
 		spawn_type = spawn_type,
 		spawned_at = os.time(),
+		dangerous = dangerous or false,
 	}
 
 	table.insert(state.state.claude_instances, instance)
@@ -133,6 +135,7 @@ function M.get_all()
 			cwd = inst.cwd,
 			spawn_type = inst.spawn_type,
 			spawned_at = inst.spawned_at,
+			dangerous = inst.dangerous,
 			number = i,
 			win = buf_to_win[inst.buf],
 		})
@@ -159,6 +162,7 @@ function M.get_for_current_project()
 				cwd = inst.cwd,
 				spawn_type = inst.spawn_type,
 				spawned_at = inst.spawned_at,
+				dangerous = inst.dangerous,
 				number = number,
 				win = buf_to_win[inst.buf],
 			})

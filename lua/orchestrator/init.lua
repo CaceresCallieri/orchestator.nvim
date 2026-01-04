@@ -26,6 +26,11 @@ local default_config = {
 			delete_tab = "<C-S-x>", -- Delete current tab
 		},
 	},
+	-- Dangerous mode configuration (--dangerously-skip-permissions)
+	dangerous_mode = {
+		enabled = true, -- Set to false to completely disable dangerous mode
+		require_confirmation = false, -- Prompt user before spawning in dangerous mode
+	},
 }
 
 --- Active configuration (merged with user opts)
@@ -43,6 +48,10 @@ local terminal = require("orchestrator.terminal")
 
 -- Create autocmd group
 local augroup = vim.api.nvim_create_augroup("Orchestrator", { clear = true })
+
+-- Debounce timer for terminal title updates
+local title_update_timer = nil
+local TITLE_DEBOUNCE_MS = 50
 
 -- ============================================================
 -- PUBLIC API: Editor Functions
@@ -128,9 +137,34 @@ end
 
 --- Spawn a new Claude terminal
 --- @param spawn_type string|nil "fresh" (default), "resume", or "continue"
+--- @param opts table|nil Options { dangerous = boolean }
 --- @return table|nil instance The spawned instance
-function M.spawn(spawn_type)
-	return terminal.spawn(spawn_type or "fresh")
+function M.spawn(spawn_type, opts)
+	opts = opts or {}
+
+	-- Check dangerous mode configuration
+	if opts.dangerous then
+		if not config.dangerous_mode.enabled then
+			vim.notify(
+				"Dangerous mode is disabled. Enable via setup({ dangerous_mode = { enabled = true } })",
+				vim.log.levels.ERROR
+			)
+			return nil
+		end
+
+		if config.dangerous_mode.require_confirmation then
+			local confirmed = vim.fn.confirm(
+				"Spawn Claude with --dangerously-skip-permissions?\n" .. "This bypasses all permission checks.",
+				"&Yes\n&No",
+				2 -- default to No
+			)
+			if confirmed ~= 1 then
+				return nil
+			end
+		end
+	end
+
+	return terminal.spawn(spawn_type or "fresh", opts)
 end
 
 --- Show unified picker to spawn or select Claude terminal
@@ -201,7 +235,14 @@ end
 
 --- Send prompt to Claude Code terminal
 --- Shows picker if multiple instances or spawn options
+--- Only works when called from inside the prompt editor
 function M.send_to_terminal()
+	-- Guard: Only allow sending from inside the prompt editor
+	if not editor.is_current_buffer_prompt() then
+		vim.notify("Send prompt only works inside the Prompt Editor", vim.log.levels.WARN)
+		return
+	end
+
 	local content = editor.get_content()
 
 	if not content then
@@ -273,47 +314,51 @@ local function setup_terminal_autocmds()
 		end,
 	})
 
-	-- Window resized: reposition status bar
-	vim.api.nvim_create_autocmd("VimResized", {
+	-- Terminal title changed: update status bar to show session name
+	-- TermRequest fires when terminal sends OSC/DCS escape sequences
+	-- Neovim updates vim.b.term_title from OSC 2 before this fires
+	-- Debounced to prevent flicker during rapid title updates (e.g., Claude streaming)
+	vim.api.nvim_create_autocmd("TermRequest", {
 		group = augroup,
-		callback = function()
-			status_bar.reposition()
-		end,
-	})
-
-	-- Focus changed: update status bar to show active instance indicator
-	-- WinEnter: fires when switching windows (split navigation)
-	-- BufEnter: fires when switching buffers in same window (<C-6>, :bnext, etc.)
-	-- Updates when entering/leaving Claude terminals or any floating window
-	vim.api.nvim_create_autocmd({ "WinEnter", "BufEnter" }, {
-		group = augroup,
-		callback = function()
-			if instances.count() == 0 then
+		callback = function(args)
+			-- Only process if it's a tracked Claude terminal
+			if not instances.get_by_buf(args.buf) then
 				return
 			end
 
+			-- Debounce: cancel pending update and schedule new one
+			if title_update_timer then
+				vim.fn.timer_stop(title_update_timer)
+			end
+
+			title_update_timer = vim.fn.timer_start(TITLE_DEBOUNCE_MS, function()
+				vim.schedule(function()
+					status_bar.update()
+					title_update_timer = nil
+				end)
+			end)
+		end,
+	})
+
+	-- Focus changed: update winbar and track active instance
+	-- WinEnter: fires when switching windows (split navigation)
+	-- BufEnter: fires when switching buffers in same window (<C-6>, :bnext, etc.)
+	-- BufWinEnter: fires when a buffer is displayed in a window (new splits, etc.)
+	-- Also applies winbar to new windows as they're created
+	vim.api.nvim_create_autocmd({ "WinEnter", "BufEnter", "BufWinEnter" }, {
+		group = augroup,
+		callback = function()
 			local current_buf = vim.api.nvim_get_current_buf()
-			local current_win = vim.api.nvim_get_current_win()
-			local prev_buf = vim.fn.bufnr("#")
-
-			-- Check if entering/leaving a Claude terminal
-			local current_is_claude = instances.get_by_buf(current_buf) ~= nil
-			local prev_is_claude = prev_buf > 0 and instances.get_by_buf(prev_buf) ~= nil
-
-			-- Check if entering a floating window (editor, picker, telescope, etc.)
-			-- Floating windows have a non-empty 'relative' config
-			local win_config = vim.api.nvim_win_get_config(current_win)
-			local is_floating = win_config.relative and win_config.relative ~= ""
 
 			-- Track last active Claude instance for picker prioritization
+			local current_is_claude = instances.get_by_buf(current_buf) ~= nil
 			if current_is_claude then
 				state.state.last_active_buf = current_buf
 			end
 
-			-- Update status bar when entering/leaving Claude terminals or any floating window
-			if current_is_claude or prev_is_claude or is_floating then
-				status_bar.update()
-			end
+			-- Update all winbars to reflect correct active state
+			-- (must update all windows so previously active one dims)
+			status_bar.update()
 		end,
 	})
 end
@@ -358,10 +403,12 @@ local function setup_user_commands()
 
 	vim.api.nvim_create_user_command("AgentsSpawn", function(opts)
 		local spawn_type = opts.args ~= "" and opts.args or "fresh"
-		M.spawn(spawn_type)
+		local dangerous = opts.bang
+		M.spawn(spawn_type, { dangerous = dangerous })
 	end, {
-		desc = "Spawn new Claude terminal",
+		desc = "Spawn new Claude terminal (use ! for dangerous mode)",
 		nargs = "?",
+		bang = true,
 		complete = function()
 			return { "fresh", "resume", "continue" }
 		end,
@@ -408,17 +455,18 @@ local function setup_user_commands()
 		print("Current cwd: " .. vim.fn.getcwd())
 		for i, inst in ipairs(all) do
 			print(string.format(
-				"  [%d] buf=%d, job_id=%d, color=%d, cwd=%s, type=%s",
+				"  [%d] buf=%d, job_id=%d, color=%d, cwd=%s, type=%s, dangerous=%s",
 				i,
 				inst.buf,
 				inst.job_id,
 				inst.color_idx,
 				inst.cwd,
-				inst.spawn_type
+				inst.spawn_type,
+				tostring(inst.dangerous or false)
 			))
 		end
-		print("Status bar visible: " .. tostring(state.state.status_bar.visible))
-		print("Status bar win: " .. tostring(state.state.status_bar.win))
+		print("Winbar visible: " .. tostring(state.state.status_bar.visible))
+		print("Winbar string: " .. status_bar.get_winbar_string())
 	end, {
 		desc = "Debug orchestrator state",
 	})
@@ -457,6 +505,17 @@ local function setup_plug_mappings()
 	vim.keymap.set("n", "<Plug>(OrchestratorSpawnContinue)", function()
 		M.spawn("continue")
 	end, { desc = "Spawn Claude terminal (continue)" })
+
+	-- Dangerous mode variants (--dangerously-skip-permissions)
+	vim.keymap.set("n", "<Plug>(OrchestratorSpawnDangerous)", function()
+		M.spawn("fresh", { dangerous = true })
+	end, { desc = "Spawn new Claude terminal (dangerous mode)" })
+	vim.keymap.set("n", "<Plug>(OrchestratorSpawnResumeDangerous)", function()
+		M.spawn("resume", { dangerous = true })
+	end, { desc = "Spawn Claude terminal (resume, dangerous mode)" })
+	vim.keymap.set("n", "<Plug>(OrchestratorSpawnContinueDangerous)", function()
+		M.spawn("continue", { dangerous = true })
+	end, { desc = "Spawn Claude terminal (continue, dangerous mode)" })
 end
 
 -- ============================================================
@@ -565,15 +624,18 @@ local function cleanup_ui()
 		end
 	end
 
-	-- Hide and delete status bar
+	-- Hide winbar from all windows
 	status_bar.hide()
-	if state.state.status_bar.buf and vim.api.nvim_buf_is_valid(state.state.status_bar.buf) then
-		vim.api.nvim_buf_delete(state.state.status_bar.buf, { force = true })
-	end
 end
 
 --- Delete autocmds and user commands
 local function cleanup_commands()
+	-- Stop pending debounce timer to prevent stale callbacks after reload
+	if title_update_timer then
+		pcall(vim.fn.timer_stop, title_update_timer)
+		title_update_timer = nil
+	end
+
 	pcall(vim.api.nvim_del_augroup_by_name, "Orchestrator")
 
 	for _, cmd in ipairs(user_commands) do

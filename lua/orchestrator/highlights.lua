@@ -1,6 +1,6 @@
 -- Highlights Module
 -- Color palette and highlight group definitions
--- Styled to match user's lualine theme (transparent backgrounds)
+-- Styled for winbar with flat lualine-style backgrounds
 
 ---@class HighlightsModule
 local M = {}
@@ -25,9 +25,6 @@ M.instance_colors = {
 	{ name = "Peach", fg = "#E19773" }, -- variable peach (syntax)
 }
 
--- Namespace for status bar extmarks
-M.namespace = nil
-
 -- Dim factor for inactive agents (0.55 = 55% brightness)
 local DIM_FACTOR = 0.55
 
@@ -45,118 +42,119 @@ local function dim_color(hex, factor)
 	return string.format("#%02X%02X%02X", r, g, b)
 end
 
+--- Validate and normalize color index to valid range (1-8)
+--- @param color_idx number|nil Raw color index
+--- @return number valid_idx Validated index (defaults to 1 if invalid)
+local function validate_color_idx(color_idx)
+	if type(color_idx) ~= "number" or color_idx < 1 or color_idx > 8 then
+		return 1
+	end
+	return math.floor(color_idx)
+end
+
 --- Setup all highlight groups
 --- Call this during plugin setup
 function M.setup()
-	-- Create namespace for status bar highlights
-	M.namespace = vim.api.nvim_create_namespace("OrchestratorStatusBar")
+	-- Override Neovim's default WinBar highlights for transparency
+	-- In Neovim 0.10+, WinBar is linked to StatusLine by default which may have a background
+	-- We explicitly set these to ensure transparent winbar background
+	vim.api.nvim_set_hl(0, "WinBar", {
+		fg = M.colors.white,
+		bg = "NONE",
+	})
+	vim.api.nvim_set_hl(0, "WinBarNC", {
+		fg = M.colors.white,
+		bg = "NONE",
+	})
+
+	-- Winbar base highlight (transparent background)
+	vim.api.nvim_set_hl(0, "OrchestratorWinbar", {
+		fg = M.colors.white,
+		bg = "NONE",
+	})
 
 	-- Create highlight groups for each instance color
 	-- OrchestratorClaude1 through OrchestratorClaude8
 	for i, color in ipairs(M.instance_colors) do
-		-- Inactive state: colored text on transparent background
-		vim.api.nvim_set_hl(0, "OrchestratorClaude" .. i, {
-			fg = color.fg,
-			bg = "none", -- Transparent to match lualine
-			bold = true,
-		})
+		-- Dimmed variants for inactive agents
+		local dimmed_fg = dim_color(color.fg, DIM_FACTOR)
 
-		-- Active bubble body: dark text on colored background
+		-- Active instance: dark text on colored background (full brightness)
 		vim.api.nvim_set_hl(0, "OrchestratorClaude" .. i .. "Active", {
 			fg = M.colors.black,
 			bg = color.fg,
 			bold = true,
 		})
 
-		-- Left chevron (): transitions into the bubble
-		vim.api.nvim_set_hl(0, "OrchestratorClaude" .. i .. "ChevronLeft", {
+		-- Active bubble cap: colored foreground on transparent (for powerline semicircles)
+		vim.api.nvim_set_hl(0, "OrchestratorClaude" .. i .. "ActiveCap", {
 			fg = color.fg,
-			bg = "none",
+			bg = "NONE",
 		})
 
-		-- Right chevron (): transitions out of the bubble
-		vim.api.nvim_set_hl(0, "OrchestratorClaude" .. i .. "ChevronRight", {
-			fg = color.fg,
-			bg = "none",
-		})
-
-		-- Dimmed variants for inactive agents
-		local dimmed_fg = dim_color(color.fg, DIM_FACTOR)
-
-		-- Dimmed bubble body: dark text on dimmed colored background
+		-- Inactive instance: dark text on dimmed colored background
 		vim.api.nvim_set_hl(0, "OrchestratorClaude" .. i .. "Dim", {
 			fg = M.colors.black,
 			bg = dimmed_fg,
 			bold = true,
 		})
 
-		-- Dimmed left cap
-		vim.api.nvim_set_hl(0, "OrchestratorClaude" .. i .. "ChevronLeftDim", {
+		-- Inactive bubble cap: dimmed foreground on transparent (for powerline semicircles)
+		vim.api.nvim_set_hl(0, "OrchestratorClaude" .. i .. "DimCap", {
 			fg = dimmed_fg,
-			bg = "none",
+			bg = "NONE",
 		})
 
-		-- Dimmed right cap
-		vim.api.nvim_set_hl(0, "OrchestratorClaude" .. i .. "ChevronRightDim", {
-			fg = dimmed_fg,
+		-- Simple colored text variant (used in picker, etc.)
+		vim.api.nvim_set_hl(0, "OrchestratorClaude" .. i, {
+			fg = color.fg,
 			bg = "none",
+			bold = true,
 		})
 	end
-
-	-- Base status bar highlight (for brackets and spacing)
-	vim.api.nvim_set_hl(0, "OrchestratorStatusBar", {
-		fg = M.colors.white,
-		bg = "none",
-	})
-
-	-- Status bar window background (fully transparent)
-	vim.api.nvim_set_hl(0, "OrchestratorStatusBarBg", {
-		bg = "none",
-	})
 end
 
---- Get highlight group name for inactive instance
---- @param color_idx number Color index (1-8)
---- @return string highlight_group
-function M.get_instance_highlight(color_idx)
-	return "OrchestratorClaude" .. color_idx
-end
-
---- Get highlight group name for active bubble content
+--- Get highlight group name for active instance (full brightness background)
 --- @param color_idx number Color index (1-8)
 --- @return string highlight_group
 function M.get_instance_active_highlight(color_idx)
-	return "OrchestratorClaude" .. color_idx .. "Active"
+	return "OrchestratorClaude" .. validate_color_idx(color_idx) .. "Active"
 end
 
---- Get highlight group name for chevron separators
---- @param color_idx number Color index (1-8)
---- @param side "left"|"right" Side of the bubble cap
---- @return string highlight_group
-function M.get_instance_chevron_highlight(color_idx, side)
-	return "OrchestratorClaude" .. color_idx .. "Chevron" .. (side == "left" and "Left" or "Right")
-end
-
---- Get highlight group name for dimmed bubble content (inactive agents)
+--- Get highlight group name for inactive instance (dimmed background)
 --- @param color_idx number Color index (1-8)
 --- @return string highlight_group
 function M.get_instance_dim_highlight(color_idx)
-	return "OrchestratorClaude" .. color_idx .. "Dim"
+	return "OrchestratorClaude" .. validate_color_idx(color_idx) .. "Dim"
 end
 
---- Get highlight group name for dimmed chevron separators (inactive agents)
+--- Get highlight group name for active bubble cap (colored fg, transparent bg)
 --- @param color_idx number Color index (1-8)
---- @param side "left"|"right" Side of the bubble cap
 --- @return string highlight_group
-function M.get_instance_chevron_dim_highlight(color_idx, side)
-	return "OrchestratorClaude" .. color_idx .. "Chevron" .. (side == "left" and "Left" or "Right") .. "Dim"
+function M.get_instance_active_cap_highlight(color_idx)
+	return "OrchestratorClaude" .. validate_color_idx(color_idx) .. "ActiveCap"
+end
+
+--- Get highlight group name for inactive bubble cap (dimmed fg, transparent bg)
+--- @param color_idx number Color index (1-8)
+--- @return string highlight_group
+function M.get_instance_dim_cap_highlight(color_idx)
+	return "OrchestratorClaude" .. validate_color_idx(color_idx) .. "DimCap"
+end
+
+--- Get highlight group name for colored text (no background)
+--- @param color_idx number Color index (1-8)
+--- @return string highlight_group
+function M.get_instance_highlight(color_idx)
+	return "OrchestratorClaude" .. validate_color_idx(color_idx)
 end
 
 --- Get color name for display (e.g., in picker)
 --- @param color_idx number Color index (1-8)
 --- @return string color_name
 function M.get_color_name(color_idx)
-	local color = M.instance_colors[color_idx]
+	local idx = validate_color_idx(color_idx)
+	local color = M.instance_colors[idx]
 	return color and color.name or "Unknown"
 end
 

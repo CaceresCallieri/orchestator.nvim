@@ -21,20 +21,21 @@ function M.set_instances(inst)
 end
 
 -- CLI command configurations for different spawn types
----@type table<string, {cmd: string, label: string, description: string}>
+-- Stores flags separately for cleaner command construction
+---@type table<string, {flags: string[], label: string, description: string}>
 M.spawn_types = {
 	fresh = {
-		cmd = "claude",
+		flags = {},
 		label = "New Claude",
 		description = "Start fresh conversation",
 	},
 	resume = {
-		cmd = "claude -r",
+		flags = { "-r" },
 		label = "Resume Claude",
 		description = "Resume last conversation",
 	},
 	continue = {
-		cmd = "claude -c",
+		flags = { "-c" },
 		label = "Continue Claude",
 		description = "Continue conversation",
 	},
@@ -59,14 +60,16 @@ end
 --- Spawn a new Claude terminal
 --- Creates buffer, opens terminal with specified variant, registers instance
 --- @param spawn_type string|nil "fresh" | "resume" | "continue" (defaults to "fresh")
+--- @param opts table|nil Options { dangerous = boolean }
 --- @return table|nil instance The created instance, or nil on failure
-function M.spawn(spawn_type)
+function M.spawn(spawn_type, opts)
 	-- Fail fast if dependencies aren't wired up
 	if not instances then
 		error("terminal.lua: instances module not initialized. Call set_instances() in setup.")
 	end
 
 	spawn_type = spawn_type or "fresh"
+	opts = opts or {}
 
 	if not M.is_valid_spawn_type(spawn_type) then
 		vim.notify("Unknown spawn type: " .. tostring(spawn_type), vim.log.levels.ERROR)
@@ -75,11 +78,20 @@ function M.spawn(spawn_type)
 
 	local cmd_config = M.spawn_types[spawn_type]
 
+	-- Build command from parts: claude [--dangerously-skip-permissions] [action-flags]
+	local cmd_parts = { "claude" }
+	if opts.dangerous then
+		table.insert(cmd_parts, "--dangerously-skip-permissions")
+	end
+	for _, flag in ipairs(cmd_config.flags) do
+		table.insert(cmd_parts, flag)
+	end
+	local cmd = table.concat(cmd_parts, " ")
+
 	-- Verify CLI is installed before attempting to spawn
-	local cmd_name = cmd_config.cmd:match("^%S+")
-	if vim.fn.executable(cmd_name) == 0 then
+	if vim.fn.executable("claude") == 0 then
 		vim.notify(
-			string.format("Command '%s' not found. Is Claude CLI installed?", cmd_name),
+			"Command 'claude' not found. Is Claude CLI installed?",
 			vim.log.levels.ERROR
 		)
 		return nil
@@ -94,7 +106,7 @@ function M.spawn(spawn_type)
 	vim.api.nvim_set_current_buf(buf)
 
 	-- Spawn terminal with Claude command
-	local job_id = vim.fn.termopen(cmd_config.cmd, {
+	local job_id = vim.fn.termopen(cmd, {
 		cwd = cwd,
 		on_exit = function(_, exit_code, _)
 			vim.schedule(function()
@@ -117,7 +129,7 @@ function M.spawn(spawn_type)
 
 	vim.cmd("startinsert")
 
-	return instances.register_spawned(buf, job_id, cwd, spawn_type)
+	return instances.register_spawned(buf, job_id, cwd, spawn_type, opts.dangerous)
 end
 
 --- Focus an existing Claude terminal
