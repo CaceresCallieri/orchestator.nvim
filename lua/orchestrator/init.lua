@@ -349,7 +349,6 @@ local function setup_terminal_autocmds()
 		group = augroup,
 		callback = function()
 			local current_buf = vim.api.nvim_get_current_buf()
-			local current_win = vim.api.nvim_get_current_win()
 
 			-- Track last active Claude instance for picker prioritization
 			local current_is_claude = instances.get_by_buf(current_buf) ~= nil
@@ -357,8 +356,9 @@ local function setup_terminal_autocmds()
 				state.state.last_active_buf = current_buf
 			end
 
-			-- Apply winbar to this window (handles visibility and instance count internally)
-			status_bar.apply_to_window(current_win)
+			-- Update all winbars to reflect correct active state
+			-- (must update all windows so previously active one dims)
+			status_bar.update()
 		end,
 	})
 end
@@ -630,6 +630,12 @@ end
 
 --- Delete autocmds and user commands
 local function cleanup_commands()
+	-- Stop pending debounce timer to prevent stale callbacks after reload
+	if title_update_timer then
+		pcall(vim.fn.timer_stop, title_update_timer)
+		title_update_timer = nil
+	end
+
 	pcall(vim.api.nvim_del_augroup_by_name, "Orchestrator")
 
 	for _, cmd in ipairs(user_commands) do
