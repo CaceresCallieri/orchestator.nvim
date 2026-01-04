@@ -10,7 +10,6 @@ M.colors = {
 	white = "#DDDDDD", -- fg_primary from wine theme
 	black = "#131313", -- bg_primary from wine theme
 	yellow = "#fdd888", -- func from wine theme
-	winbar_bg = "#1a1a1a", -- slightly lighter than black for winbar background
 }
 
 -- Instance color palette (8 distinct colors for Claude instances)
@@ -46,22 +45,34 @@ end
 --- Setup all highlight groups
 --- Call this during plugin setup
 function M.setup()
-	-- Winbar base highlight (solid background spanning full width)
+	-- Override Neovim's default WinBar highlights for transparency
+	-- In Neovim 0.10+, WinBar is linked to StatusLine by default which may have a background
+	-- We explicitly set these to ensure transparent winbar background
+	vim.api.nvim_set_hl(0, "WinBar", {
+		fg = M.colors.white,
+		bg = "NONE",
+	})
+	vim.api.nvim_set_hl(0, "WinBarNC", {
+		fg = M.colors.white,
+		bg = "NONE",
+	})
+
+	-- Winbar base highlight (transparent background)
 	vim.api.nvim_set_hl(0, "OrchestratorWinbar", {
 		fg = M.colors.white,
-		bg = M.colors.winbar_bg,
+		bg = "NONE",
 	})
 
 	-- Winbar text (for labels and separators)
 	vim.api.nvim_set_hl(0, "OrchestratorWinbarText", {
 		fg = M.colors.white,
-		bg = M.colors.winbar_bg,
+		bg = "NONE",
 	})
 
 	-- Winbar separator between instances
 	vim.api.nvim_set_hl(0, "OrchestratorWinbarSep", {
 		fg = "#555555",
-		bg = M.colors.winbar_bg,
+		bg = "NONE",
 	})
 
 	-- Create highlight groups for each instance color
