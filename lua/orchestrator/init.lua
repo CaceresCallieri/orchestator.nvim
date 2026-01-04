@@ -340,47 +340,25 @@ local function setup_terminal_autocmds()
 		end,
 	})
 
-	-- Window resized: reposition status bar
-	vim.api.nvim_create_autocmd("VimResized", {
-		group = augroup,
-		callback = function()
-			status_bar.reposition()
-		end,
-	})
-
-	-- Focus changed: update status bar to show active instance indicator
+	-- Focus changed: update winbar and track active instance
 	-- WinEnter: fires when switching windows (split navigation)
 	-- BufEnter: fires when switching buffers in same window (<C-6>, :bnext, etc.)
-	-- Updates when entering/leaving Claude terminals or any floating window
-	vim.api.nvim_create_autocmd({ "WinEnter", "BufEnter" }, {
+	-- BufWinEnter: fires when a buffer is displayed in a window (new splits, etc.)
+	-- Also applies winbar to new windows as they're created
+	vim.api.nvim_create_autocmd({ "WinEnter", "BufEnter", "BufWinEnter" }, {
 		group = augroup,
 		callback = function()
-			if instances.count() == 0 then
-				return
-			end
-
 			local current_buf = vim.api.nvim_get_current_buf()
 			local current_win = vim.api.nvim_get_current_win()
-			local prev_buf = vim.fn.bufnr("#")
-
-			-- Check if entering/leaving a Claude terminal
-			local current_is_claude = instances.get_by_buf(current_buf) ~= nil
-			local prev_is_claude = prev_buf > 0 and instances.get_by_buf(prev_buf) ~= nil
-
-			-- Check if entering a floating window (editor, picker, telescope, etc.)
-			-- Floating windows have a non-empty 'relative' config
-			local win_config = vim.api.nvim_win_get_config(current_win)
-			local is_floating = win_config.relative and win_config.relative ~= ""
 
 			-- Track last active Claude instance for picker prioritization
+			local current_is_claude = instances.get_by_buf(current_buf) ~= nil
 			if current_is_claude then
 				state.state.last_active_buf = current_buf
 			end
 
-			-- Update status bar when entering/leaving Claude terminals or any floating window
-			if current_is_claude or prev_is_claude or is_floating then
-				status_bar.update()
-			end
+			-- Apply winbar to this window (handles visibility and instance count internally)
+			status_bar.apply_to_window(current_win)
 		end,
 	})
 end
@@ -487,8 +465,8 @@ local function setup_user_commands()
 				tostring(inst.dangerous or false)
 			))
 		end
-		print("Status bar visible: " .. tostring(state.state.status_bar.visible))
-		print("Status bar win: " .. tostring(state.state.status_bar.win))
+		print("Winbar visible: " .. tostring(state.state.status_bar.visible))
+		print("Winbar string: " .. status_bar.get_winbar_string())
 	end, {
 		desc = "Debug orchestrator state",
 	})
@@ -646,11 +624,8 @@ local function cleanup_ui()
 		end
 	end
 
-	-- Hide and delete status bar
+	-- Hide winbar from all windows
 	status_bar.hide()
-	if state.state.status_bar.buf and vim.api.nvim_buf_is_valid(state.state.status_bar.buf) then
-		vim.api.nvim_buf_delete(state.state.status_bar.buf, { force = true })
-	end
 end
 
 --- Delete autocmds and user commands

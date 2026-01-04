@@ -1,6 +1,6 @@
 -- Status Bar Module
--- Floating status bar UI for displaying Claude instances
--- Positioned above lualine, styled to match its aesthetic
+-- Winbar-based status bar for displaying Claude instances
+-- Uses vim.wo.winbar with statusline format strings for lualine-style rendering
 
 local state = require("orchestrator.state")
 local highlights = require("orchestrator.highlights")
@@ -11,14 +11,6 @@ local M = {}
 
 -- Configuration constants
 local config = {
-	zindex = 45, -- Below editor (50), above normal content
-	lualine_offset = 3, -- Lines from bottom (cmdline=-1, statusline=-2, bar=-3)
-	min_width = 10, -- Minimum window width
-	padding = 4, -- Horizontal padding around content
-	max_width_ratio = 0.8, -- Maximum 80% of screen width
-	-- Bubble effect separators (powerline rounded symbols)
-	bubble_left = "", -- U+E0B6 (left semicircle)
-	bubble_right = "", -- U+E0B4 (right semicircle)
 	-- Title display settings
 	title = {
 		max_length = 32, -- Maximum characters before truncation
@@ -26,14 +18,15 @@ local config = {
 		separator = " │ ", -- Between number and title (U+2502 thin vertical bar)
 		fallback = nil, -- Show when no title available (nil = number only)
 	},
+	-- Separators between instances
+	instance_separator = "  ", -- Two spaces between instance segments
 }
-
--- Padding constants for bubble content
-local ACTIVE_PADDING = 2 -- spaces on each side for active bubble
-local INACTIVE_PADDING = 1 -- spaces on each side for inactive bubbles
 
 -- Dangerous mode indicator (warning sign U+26A0)
 local DANGER_INDICATOR = "⚠ "
+
+-- Padding around instance content
+local INSTANCE_PADDING = "  " -- Two spaces on each side
 
 -- Shell names to filter out (before Claude sets actual title)
 local SHELL_NAMES = { "zsh", "bash", "fish", "sh", "dash", "ksh", "tcsh", "csh" }
@@ -65,35 +58,6 @@ local function is_instance_active(inst, in_claude, current_win)
 		and inst.win
 		and vim.api.nvim_win_is_valid(inst.win)
 		and inst.win == current_win
-end
-
---- Check if any Claude instance is currently active
---- Mirrors the logic in render() to determine active state
---- @return boolean has_active True if an instance is active
-local function has_active_instance()
-	local all_instances = instances.get_all()
-	if #all_instances == 0 then
-		return false
-	end
-
-	local current_win = vim.api.nvim_get_current_win()
-	if not vim.api.nvim_win_is_valid(current_win) then
-		return false
-	end
-
-	-- Only show active indicator when inside a Claude terminal
-	if not is_in_claude_terminal() then
-		return false
-	end
-
-	-- Check if current window matches any Claude instance
-	for _, inst in ipairs(all_instances) do
-		if inst.win and vim.api.nvim_win_is_valid(inst.win) and inst.win == current_win then
-			return true
-		end
-	end
-
-	return false
 end
 
 --- Get and truncate the session title for an instance
@@ -146,246 +110,116 @@ local function get_instance_title(buf)
 	return title
 end
 
---- Calculate the content width based on number of instances and their titles
---- Iterates through instances to sum variable widths (titles vary in length)
---- @param all_instances table Array of instance objects
---- @param title_cache table Map of buf -> title (cached lookups)
---- @return number width Content width in display columns
-local function calculate_content_width(all_instances, title_cache)
-	local count = #all_instances
-	if count == 0 then
-		return 0
+--- Check if a window should have the winbar applied
+--- Excludes floating windows, special buffers, etc.
+--- @param win number Window ID
+--- @return boolean should_apply True if winbar should be applied
+local function should_apply_winbar(win)
+	if not vim.api.nvim_win_is_valid(win) then
+		return false
 	end
 
-	local current_win = vim.api.nvim_get_current_win()
-	local in_claude = is_in_claude_terminal()
-	local total_width = 0
+	-- Skip floating windows
+	local win_config = vim.api.nvim_win_get_config(win)
+	if win_config.relative ~= "" then
+		return false
+	end
 
-	for i, inst in ipairs(all_instances) do
-		-- Determine if this instance is active (for padding calculation)
-		local is_active = is_instance_active(inst, in_claude, current_win)
-		local padding_size = is_active and ACTIVE_PADDING or INACTIVE_PADDING
+	-- Get the buffer in this window
+	local buf = vim.api.nvim_win_get_buf(win)
+	if not vim.api.nvim_buf_is_valid(buf) then
+		return false
+	end
 
-		-- Calculate bubble content width: padding + (danger?)+ number + (separator + title)? + padding
-		local content_width = padding_size -- left padding
-		if inst.dangerous then
-			content_width = content_width + vim.fn.strdisplaywidth(DANGER_INDICATOR)
-		end
-		content_width = content_width + vim.fn.strdisplaywidth(tostring(inst.number))
-
-		local title = title_cache[inst.buf]
-		if title then
-			content_width = content_width + vim.fn.strdisplaywidth(config.title.separator)
-			content_width = content_width + vim.fn.strdisplaywidth(title)
-		elseif config.title.fallback then
-			content_width = content_width + vim.fn.strdisplaywidth(config.title.separator)
-			content_width = content_width + vim.fn.strdisplaywidth(config.title.fallback)
-		end
-
-		content_width = content_width + padding_size -- right padding
-
-		-- Add bubble caps
-		content_width = content_width + vim.fn.strdisplaywidth(config.bubble_left)
-		content_width = content_width + vim.fn.strdisplaywidth(config.bubble_right)
-
-		total_width = total_width + content_width
-
-		-- Add space between bubbles
-		if i < count then
-			total_width = total_width + 1
+	-- Skip special buffer types
+	local buftype = vim.bo[buf].buftype
+	if buftype == "quickfix" or buftype == "loclist" or buftype == "nofile" then
+		-- Allow nofile only if it's our prompt editor
+		local bufname = vim.api.nvim_buf_get_name(buf)
+		if not bufname:match("^orchestrator://") then
+			return false
 		end
 	end
 
-	return total_width
+	return true
 end
 
---- Get window position for status bar
---- Positioned just above lualine
---- @param all_instances? table Array of instance objects (optional, fetched if nil)
---- @param title_cache? table Map of buf -> title (optional, built if nil)
---- @return table win_opts Window configuration
-local function get_position(all_instances, title_cache)
-	-- Fallback: fetch instances and build cache if not provided
-	if not all_instances then
-		all_instances = instances.get_all()
-	end
-	if not title_cache then
-		title_cache = {}
-		for _, inst in ipairs(all_instances) do
-			title_cache[inst.buf] = get_instance_title(inst.buf)
-		end
-	end
-	local content_width = calculate_content_width(all_instances, title_cache)
-	local max_width = math.floor(vim.o.columns * config.max_width_ratio)
-	local width = math.max(config.min_width, math.min(content_width + config.padding, max_width))
-
-	return {
-		relative = "editor",
-		width = width,
-		height = 1,
-		row = vim.o.lines - config.lualine_offset,
-		col = math.floor((vim.o.columns - width) / 2),
-		style = "minimal",
-		border = "none",
-		focusable = false,
-		zindex = config.zindex,
-	}
-end
-
---- Create or get the status bar buffer
---- @return number buf Buffer ID
-local function get_or_create_buffer()
-	if state.state.status_bar.buf and vim.api.nvim_buf_is_valid(state.state.status_bar.buf) then
-		return state.state.status_bar.buf
-	end
-
-	local buf = vim.api.nvim_create_buf(false, true) -- unlisted, scratch
-
-	vim.bo[buf].buftype = "nofile"
-	vim.bo[buf].bufhidden = "wipe"
-	vim.bo[buf].swapfile = false
-	vim.bo[buf].modifiable = true
-
-	vim.api.nvim_buf_set_name(buf, "orchestrator-status-bar")
-
-	state.state.status_bar.buf = buf
-	return buf
-end
-
---- Render status bar content with colored instance indicators
---- Active instance displayed as bubble with chevron separators
---- Inactive instances displayed with parentheses
---- @param buf number Status bar buffer
-local function render(buf)
+--- Build the winbar string using statusline format syntax
+--- Format: %#Highlight#text for colored segments
+--- @return string winbar_str The formatted winbar string
+local function build_winbar_string()
 	local all_instances = instances.get_all()
 
 	if #all_instances == 0 then
-		vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "" })
-		return
+		return ""
 	end
 
-	-- Cache titles once for both width calculation and rendering
+	-- Cache titles once for rendering
 	local title_cache = {}
 	for _, inst in ipairs(all_instances) do
 		title_cache[inst.buf] = get_instance_title(inst.buf)
 	end
 
-	-- Detect active instance (the one in the current window)
+	-- Detect active instance context
 	local current_win = vim.api.nvim_get_current_win()
-
-	-- Validate current window before proceeding
-	if not vim.api.nvim_win_is_valid(current_win) then
-		return
-	end
-
-	-- Check if we're currently in a Claude terminal window
 	local in_claude_terminal = is_in_claude_terminal()
 
-	local win_opts = get_position(all_instances, title_cache)
-
-	-- Build parts and track highlight regions
-	local parts = {}
-	local highlight_regions = {} -- {start_byte, end_byte, hl_group}
-	local byte_offset = 0 -- Track byte position for extmarks
+	-- Build the winbar string with statusline format syntax
+	-- Start with background and center alignment
+	local parts = { "%#OrchestratorWinbar#%=" }
 
 	for i, inst in ipairs(all_instances) do
-		-- Only mark as active when inside a Claude terminal that matches this instance
+		-- Determine if this instance is active
 		local is_active = is_instance_active(inst, in_claude_terminal, current_win)
 
-		-- Bubble format: active gets wider padding for emphasis
-		local left_cap = config.bubble_left
-		local padding = string.rep(" ", is_active and ACTIVE_PADDING or INACTIVE_PADDING)
+		-- Select highlight group based on active state
+		local hl_group = is_active
+				and highlights.get_instance_active_highlight(inst.color_idx)
+			or highlights.get_instance_dim_highlight(inst.color_idx)
 
-		-- Build content: (danger?) + number + (separator + title)?
+		-- Build content: padding + (danger?) + number + (separator + title)? + padding
 		local danger_prefix = inst.dangerous and DANGER_INDICATOR or ""
 		local number_str = tostring(inst.number)
 		local title = title_cache[inst.buf]
 		local content
 
 		if title then
-			content = padding .. danger_prefix .. number_str .. config.title.separator .. title .. padding
+			content = INSTANCE_PADDING .. danger_prefix .. number_str .. config.title.separator .. title .. INSTANCE_PADDING
 		elseif config.title.fallback then
-			content = padding .. danger_prefix .. number_str .. config.title.separator .. config.title.fallback .. padding
+			content = INSTANCE_PADDING .. danger_prefix .. number_str .. config.title.separator .. config.title.fallback .. INSTANCE_PADDING
 		else
-			content = padding .. danger_prefix .. number_str .. padding
+			content = INSTANCE_PADDING .. danger_prefix .. number_str .. INSTANCE_PADDING
 		end
 
-		local right_cap = config.bubble_right
+		-- Add highlighted segment: %#HighlightGroup#content
+		table.insert(parts, string.format("%%#%s#%s", hl_group, content))
 
-		-- Add parts
-		table.insert(parts, left_cap)
-		table.insert(parts, content)
-		table.insert(parts, right_cap)
-
-		-- Determine highlight groups based on active state
-		-- Active: full brightness, Inactive: dimmed
-		local left_cap_hl, content_hl, right_cap_hl
-		if is_active then
-			left_cap_hl = highlights.get_instance_chevron_highlight(inst.color_idx, "left")
-			content_hl = highlights.get_instance_active_highlight(inst.color_idx)
-			right_cap_hl = highlights.get_instance_chevron_highlight(inst.color_idx, "right")
-		else
-			left_cap_hl = highlights.get_instance_chevron_dim_highlight(inst.color_idx, "left")
-			content_hl = highlights.get_instance_dim_highlight(inst.color_idx)
-			right_cap_hl = highlights.get_instance_chevron_dim_highlight(inst.color_idx, "right")
-		end
-
-		-- Track highlight regions for left bubble cap
-		table.insert(highlight_regions, {
-			start_byte = byte_offset,
-			end_byte = byte_offset + #left_cap,
-			hl_group = left_cap_hl,
-		})
-		byte_offset = byte_offset + #left_cap
-
-		-- Track highlight regions for content
-		table.insert(highlight_regions, {
-			start_byte = byte_offset,
-			end_byte = byte_offset + #content,
-			hl_group = content_hl,
-		})
-		byte_offset = byte_offset + #content
-
-		-- Track highlight regions for right bubble cap
-		table.insert(highlight_regions, {
-			start_byte = byte_offset,
-			end_byte = byte_offset + #right_cap,
-			hl_group = right_cap_hl,
-		})
-		byte_offset = byte_offset + #right_cap
-
-		-- Add space between instances
+		-- Add separator between instances (with winbar background)
 		if i < #all_instances then
-			table.insert(parts, " ")
-			byte_offset = byte_offset + 1
+			table.insert(parts, string.format("%%#OrchestratorWinbar#%s", config.instance_separator))
 		end
 	end
 
-	local line = table.concat(parts)
+	-- End with background fill and right alignment marker
+	table.insert(parts, "%#OrchestratorWinbar#%=")
 
-	-- Center the content with padding
-	local display_width = vim.fn.strdisplaywidth(line)
-	local padding = math.max(0, math.floor((win_opts.width - display_width) / 2))
-	local padded_line = string.rep(" ", padding) .. line
+	return table.concat(parts)
+end
 
-	vim.bo[buf].modifiable = true
-	vim.api.nvim_buf_set_lines(buf, 0, -1, false, { padded_line })
-	vim.bo[buf].modifiable = false
-
-	-- Apply highlights using extmarks
-	vim.api.nvim_buf_clear_namespace(buf, highlights.namespace, 0, -1)
-
-	for _, region in ipairs(highlight_regions) do
-		vim.api.nvim_buf_set_extmark(buf, highlights.namespace, 0, padding + region.start_byte, {
-			end_col = padding + region.end_byte,
-			hl_group = region.hl_group,
-		})
+--- Apply winbar to all applicable windows
+--- @param winbar_str string The winbar string to apply (empty string to clear)
+local function apply_to_all_windows(winbar_str)
+	for _, win in ipairs(vim.api.nvim_list_wins()) do
+		if should_apply_winbar(win) then
+			vim.wo[win].winbar = winbar_str
+		end
 	end
 end
 
---- Show the status bar floating window
+--- Show the winbar on all windows
 function M.show()
 	if instances.count() == 0 then
+		M.hide()
 		return
 	end
 
@@ -393,36 +227,16 @@ function M.show()
 		return
 	end
 
-	local buf = get_or_create_buffer()
-	local win_opts = get_position()
-
-	if state.state.status_bar.win and vim.api.nvim_win_is_valid(state.state.status_bar.win) then
-		vim.api.nvim_win_set_config(state.state.status_bar.win, win_opts)
-		render(buf)
-		return
-	end
-
-	local win = vim.api.nvim_open_win(buf, false, win_opts)
-
-	vim.wo[win].number = false
-	vim.wo[win].relativenumber = false
-	vim.wo[win].cursorline = false
-	vim.wo[win].signcolumn = "no"
-	vim.wo[win].winhighlight = "Normal:OrchestratorStatusBarBg,NormalFloat:OrchestratorStatusBarBg"
-
-	state.state.status_bar.win = win
-	render(buf)
+	local winbar_str = build_winbar_string()
+	apply_to_all_windows(winbar_str)
 end
 
---- Hide the status bar floating window
+--- Hide the winbar from all windows
 function M.hide()
-	if state.state.status_bar.win and vim.api.nvim_win_is_valid(state.state.status_bar.win) then
-		vim.api.nvim_win_close(state.state.status_bar.win, true)
-		state.state.status_bar.win = nil
-	end
+	apply_to_all_windows("")
 end
 
---- Update status bar (re-render and resize)
+--- Update the winbar (rebuild and reapply)
 --- Call this after instances change
 function M.update()
 	if instances.count() == 0 then
@@ -435,7 +249,7 @@ function M.update()
 	end
 end
 
---- Toggle status bar visibility
+--- Toggle winbar visibility
 function M.toggle()
 	state.state.status_bar.visible = not state.state.status_bar.visible
 
@@ -446,16 +260,33 @@ function M.toggle()
 	end
 end
 
---- Reposition status bar (call on VimResized)
-function M.reposition()
-	if state.state.status_bar.win and vim.api.nvim_win_is_valid(state.state.status_bar.win) then
-		local win_opts = get_position()
-		vim.api.nvim_win_set_config(state.state.status_bar.win, win_opts)
-
-		if state.state.status_bar.buf and vim.api.nvim_buf_is_valid(state.state.status_bar.buf) then
-			render(state.state.status_bar.buf)
-		end
+--- Apply winbar to a specific window (called from autocmd)
+--- @param win number Window ID to apply winbar to
+function M.apply_to_window(win)
+	if not state.state.status_bar.visible then
+		return
 	end
+
+	if instances.count() == 0 then
+		if vim.api.nvim_win_is_valid(win) then
+			vim.wo[win].winbar = ""
+		end
+		return
+	end
+
+	if should_apply_winbar(win) then
+		local winbar_str = build_winbar_string()
+		vim.wo[win].winbar = winbar_str
+	end
+end
+
+--- Get the current winbar string (for external use/debugging)
+--- @return string winbar_str The current winbar string
+function M.get_winbar_string()
+	if instances.count() == 0 or not state.state.status_bar.visible then
+		return ""
+	end
+	return build_winbar_string()
 end
 
 return M

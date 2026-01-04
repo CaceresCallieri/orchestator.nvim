@@ -15,11 +15,9 @@ M.state = {
 		current_tab_idx = 1, -- Index into tabs array (1-indexed)
 	},
 
-	-- Status bar state
+	-- Status bar state (winbar-based, no floating window)
 	status_bar = {
-		win = nil, -- Window ID of status bar
-		buf = nil, -- Buffer ID of status bar buffer
-		visible = true, -- Whether bar should be shown when instances exist
+		visible = true, -- Whether winbar should be shown when instances exist
 	},
 
 	-- Claude instance tracking (spawn-controlled)
@@ -46,8 +44,6 @@ function M.reset()
 	M.state.editor.win = nil
 	M.state.editor.tabs = {}
 	M.state.editor.current_tab_idx = 1
-	M.state.status_bar.win = nil
-	M.state.status_bar.buf = nil
 	M.state.status_bar.visible = true
 	M.state.claude_instances = {}
 	M.state.next_color_idx = 1
