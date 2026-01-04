@@ -42,6 +42,16 @@ local function dim_color(hex, factor)
 	return string.format("#%02X%02X%02X", r, g, b)
 end
 
+--- Validate and normalize color index to valid range (1-8)
+--- @param color_idx number|nil Raw color index
+--- @return number valid_idx Validated index (defaults to 1 if invalid)
+local function validate_color_idx(color_idx)
+	if type(color_idx) ~= "number" or color_idx < 1 or color_idx > 8 then
+		return 1
+	end
+	return math.floor(color_idx)
+end
+
 --- Setup all highlight groups
 --- Call this during plugin setup
 function M.setup()
@@ -60,18 +70,6 @@ function M.setup()
 	-- Winbar base highlight (transparent background)
 	vim.api.nvim_set_hl(0, "OrchestratorWinbar", {
 		fg = M.colors.white,
-		bg = "NONE",
-	})
-
-	-- Winbar text (for labels and separators)
-	vim.api.nvim_set_hl(0, "OrchestratorWinbarText", {
-		fg = M.colors.white,
-		bg = "NONE",
-	})
-
-	-- Winbar separator between instances
-	vim.api.nvim_set_hl(0, "OrchestratorWinbarSep", {
-		fg = "#555555",
 		bg = "NONE",
 	})
 
@@ -120,42 +118,43 @@ end
 --- @param color_idx number Color index (1-8)
 --- @return string highlight_group
 function M.get_instance_active_highlight(color_idx)
-	return "OrchestratorClaude" .. color_idx .. "Active"
+	return "OrchestratorClaude" .. validate_color_idx(color_idx) .. "Active"
 end
 
 --- Get highlight group name for inactive instance (dimmed background)
 --- @param color_idx number Color index (1-8)
 --- @return string highlight_group
 function M.get_instance_dim_highlight(color_idx)
-	return "OrchestratorClaude" .. color_idx .. "Dim"
+	return "OrchestratorClaude" .. validate_color_idx(color_idx) .. "Dim"
 end
 
 --- Get highlight group name for active bubble cap (colored fg, transparent bg)
 --- @param color_idx number Color index (1-8)
 --- @return string highlight_group
 function M.get_instance_active_cap_highlight(color_idx)
-	return "OrchestratorClaude" .. color_idx .. "ActiveCap"
+	return "OrchestratorClaude" .. validate_color_idx(color_idx) .. "ActiveCap"
 end
 
 --- Get highlight group name for inactive bubble cap (dimmed fg, transparent bg)
 --- @param color_idx number Color index (1-8)
 --- @return string highlight_group
 function M.get_instance_dim_cap_highlight(color_idx)
-	return "OrchestratorClaude" .. color_idx .. "DimCap"
+	return "OrchestratorClaude" .. validate_color_idx(color_idx) .. "DimCap"
 end
 
 --- Get highlight group name for colored text (no background)
 --- @param color_idx number Color index (1-8)
 --- @return string highlight_group
 function M.get_instance_highlight(color_idx)
-	return "OrchestratorClaude" .. color_idx
+	return "OrchestratorClaude" .. validate_color_idx(color_idx)
 end
 
 --- Get color name for display (e.g., in picker)
 --- @param color_idx number Color index (1-8)
 --- @return string color_name
 function M.get_color_name(color_idx)
-	local color = M.instance_colors[color_idx]
+	local idx = validate_color_idx(color_idx)
+	local color = M.instance_colors[idx]
 	return color and color.name or "Unknown"
 end
 
