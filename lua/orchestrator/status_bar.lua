@@ -36,31 +36,12 @@ local INSTANCE_PADDING = "  " -- Two spaces on each side
 -- Shell names to filter out (before Claude sets actual title)
 local SHELL_NAMES = { "zsh", "bash", "fish", "sh", "dash", "ksh", "tcsh", "csh" }
 
---- Check if the current window is a Claude terminal window
---- @return boolean is_claude_win True if current window is a Claude terminal
-local function is_in_claude_terminal()
-	local current_win = vim.api.nvim_get_current_win()
-	if not vim.api.nvim_win_is_valid(current_win) then
-		return false
-	end
-
-	for _, inst in ipairs(instances.get_all()) do
-		if inst.win and vim.api.nvim_win_is_valid(inst.win) and inst.win == current_win then
-			return true
-		end
-	end
-
-	return false
-end
-
---- Check if a specific instance is currently active
+--- Check if a specific instance is currently active (displayed in current window)
 --- @param inst table Instance object with win field
---- @param in_claude boolean Whether currently in a Claude terminal
 --- @param current_win number Current window ID
---- @return boolean is_active True if this instance is active
-local function is_instance_active(inst, in_claude, current_win)
-	return in_claude
-		and inst.win
+--- @return boolean is_active True if this instance is the active one
+local function is_instance_active(inst, current_win)
+	return inst.win
 		and vim.api.nvim_win_is_valid(inst.win)
 		and inst.win == current_win
 end
@@ -136,14 +117,11 @@ local function should_apply_winbar(win)
 		return false
 	end
 
-	-- Skip special buffer types
+	-- Skip special buffer types (quickfix, loclist, nofile)
+	-- Terminal buffers (buftype="terminal") are allowed so Claude instances get winbar
 	local buftype = vim.bo[buf].buftype
 	if buftype == "quickfix" or buftype == "loclist" or buftype == "nofile" then
-		-- Allow nofile only if it's our prompt editor
-		local bufname = vim.api.nvim_buf_get_name(buf)
-		if not bufname:match("^orchestrator://") then
-			return false
-		end
+		return false
 	end
 
 	return true
@@ -165,17 +143,16 @@ local function build_winbar_string()
 		title_cache[inst.buf] = get_instance_title(inst.buf)
 	end
 
-	-- Detect active instance context
+	-- Get current window for active state detection
 	local current_win = vim.api.nvim_get_current_win()
-	local in_claude_terminal = is_in_claude_terminal()
 
 	-- Build the winbar string with statusline format syntax
 	-- Start with background and center alignment
 	local parts = { "%#OrchestratorWinbar#%=" }
 
 	for i, inst in ipairs(all_instances) do
-		-- Determine if this instance is active
-		local is_active = is_instance_active(inst, in_claude_terminal, current_win)
+		-- Determine if this instance is active (its window is focused)
+		local is_active = is_instance_active(inst, current_win)
 
 		-- Select highlight groups based on active state
 		local body_hl = is_active
@@ -222,7 +199,10 @@ end
 local function apply_to_all_windows(winbar_str)
 	for _, win in ipairs(vim.api.nvim_list_wins()) do
 		if should_apply_winbar(win) then
-			vim.wo[win].winbar = winbar_str
+			-- Use pcall to handle race condition where window closes between check and assignment
+			pcall(function()
+				vim.wo[win].winbar = winbar_str
+			end)
 		end
 	end
 end
@@ -268,26 +248,6 @@ function M.toggle()
 		M.show()
 	else
 		M.hide()
-	end
-end
-
---- Apply winbar to a specific window (called from autocmd)
---- @param win number Window ID to apply winbar to
-function M.apply_to_window(win)
-	if not state.state.status_bar.visible then
-		return
-	end
-
-	if instances.count() == 0 then
-		if vim.api.nvim_win_is_valid(win) then
-			vim.wo[win].winbar = ""
-		end
-		return
-	end
-
-	if should_apply_winbar(win) then
-		local winbar_str = build_winbar_string()
-		vim.wo[win].winbar = winbar_str
 	end
 end
 
