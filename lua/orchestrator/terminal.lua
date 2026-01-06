@@ -9,6 +9,10 @@ local M = {}
 ---@type table|nil
 local instances = nil
 
+-- Plugin configuration (set via setter from init.lua)
+---@type table
+local terminal_config = {}
+
 -- Configuration constants
 local config = {
 	valid_spawn_types = { "fresh", "resume", "continue" },
@@ -18,6 +22,47 @@ local config = {
 --- @param inst table The instances module
 function M.set_instances(inst)
 	instances = inst
+end
+
+--- Set the plugin configuration (called from init.lua)
+--- @param cfg table The plugin configuration
+function M.set_config(cfg)
+	terminal_config = cfg
+end
+
+--- Set up buffer-local keybindings for Claude terminal
+--- @param buf number Buffer ID
+--- @param kill_fn function The kill_current_or_pick function from init.lua
+local function setup_terminal_keybindings(buf, kill_fn)
+	local km = terminal_config.keymaps and terminal_config.keymaps.terminal
+	if km == false then
+		return -- All terminal keymaps disabled
+	end
+	km = km or {}
+
+	if km.close and km.close ~= false then
+		-- Both terminal mode (t) and normal mode (n) to cover active input
+		-- and when user exits terminal mode with <C-\><C-n>
+		vim.keymap.set({ "t", "n" }, km.close, function()
+			kill_fn()
+		end, {
+			buffer = buf,
+			noremap = true,
+			silent = true,
+			desc = "Close Claude instance",
+		})
+	end
+end
+
+--- Reapply terminal keybindings to existing instances (called during reload)
+--- @param instances_list table[] Array of instance objects
+--- @param kill_fn function The kill_current_or_pick function from init.lua
+function M.reapply_keybindings_to_existing(instances_list, kill_fn)
+	for _, inst in ipairs(instances_list) do
+		if vim.api.nvim_buf_is_valid(inst.buf) then
+			setup_terminal_keybindings(inst.buf, kill_fn)
+		end
+	end
 end
 
 -- CLI command configurations for different spawn types
@@ -60,7 +105,7 @@ end
 --- Spawn a new Claude terminal
 --- Creates buffer, opens terminal with specified variant, registers instance
 --- @param spawn_type string|nil "fresh" | "resume" | "continue" (defaults to "fresh")
---- @param opts table|nil Options { dangerous = boolean }
+--- @param opts table|nil Options { dangerous = boolean, kill_fn = function }
 --- @return table|nil instance The created instance, or nil on failure
 function M.spawn(spawn_type, opts)
 	-- Fail fast if dependencies aren't wired up
@@ -110,9 +155,9 @@ function M.spawn(spawn_type, opts)
 		cwd = cwd,
 		on_exit = function(_, exit_code, _)
 			vim.schedule(function()
-				-- Only notify if exit was abnormal (non-zero)
-				-- Normal exits happen when user types /exit
-				if exit_code ~= 0 then
+				-- Only notify if exit was abnormal
+				-- Normal exits: 0 (/exit command), 129 (SIGHUP from jobstop when killed)
+				if exit_code ~= 0 and exit_code ~= 129 then
 					vim.notify(string.format("Claude exited with code %d", exit_code), vim.log.levels.WARN)
 				end
 			end)
@@ -128,6 +173,11 @@ function M.spawn(spawn_type, opts)
 	end
 
 	vim.cmd("startinsert")
+
+	-- Set up buffer-local keymaps if kill function was provided
+	if opts.kill_fn then
+		setup_terminal_keybindings(buf, opts.kill_fn)
+	end
 
 	return instances.register_spawned(buf, job_id, cwd, spawn_type, opts.dangerous)
 end

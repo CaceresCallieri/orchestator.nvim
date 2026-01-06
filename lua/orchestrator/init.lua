@@ -25,6 +25,10 @@ local default_config = {
 			new_tab = "<C-S-n>", -- New prompt tab
 			delete_tab = "<C-S-x>", -- Delete current tab
 		},
+		-- Buffer-local keymaps for Claude terminal buffers (set to false to disable)
+		terminal = {
+			close = "<C-S-q>", -- Close current Claude instance
+		},
 	},
 	-- Dangerous mode configuration (--dangerously-skip-permissions)
 	dangerous_mode = {
@@ -164,6 +168,9 @@ function M.spawn(spawn_type, opts)
 		end
 	end
 
+	-- Pass kill function for terminal buffer keymap setup
+	opts.kill_fn = M.kill_current_or_pick
+
 	return terminal.spawn(spawn_type or "fresh", opts)
 end
 
@@ -201,6 +208,41 @@ function M.kill(num)
 
 	terminal.kill(project_instances[num])
 	vim.notify(string.format("Killed Claude instance %d", num), vim.log.levels.INFO)
+end
+
+--- Kill current Claude instance or pick one to kill
+--- Context-aware: if inside Claude terminal, kills it; otherwise shows picker
+function M.kill_current_or_pick()
+	local current_buf = vim.api.nvim_get_current_buf()
+	local current_instance = instances.get_by_buf(current_buf)
+
+	if current_instance then
+		-- Inside a Claude terminal - kill this instance directly
+		terminal.kill(current_instance)
+		return
+	end
+
+	-- Not inside a Claude terminal - check for project instances
+	local project_instances = instances.get_for_current_project()
+
+	if #project_instances == 0 then
+		vim.notify("No Claude instances in current project", vim.log.levels.WARN)
+		return
+	end
+
+	-- Single instance: skip picker for efficiency
+	if #project_instances == 1 then
+		terminal.kill(project_instances[1])
+		return
+	end
+
+	-- Multiple instances: show picker
+	picker.select_existing(function(term)
+		local inst = instances.get_by_buf(term.buf)
+		if inst then
+			terminal.kill(inst)
+		end
+	end)
 end
 
 --- Focus a Claude instance by project-local number
@@ -446,6 +488,10 @@ local function setup_user_commands()
 		nargs = "?",
 	})
 
+	vim.api.nvim_create_user_command("AgentsClose", M.kill_current_or_pick, {
+		desc = "Close current Claude instance or pick one",
+	})
+
 	vim.api.nvim_create_user_command("OrchestratorDebug", function()
 		local all = instances.get_all()
 		local project = instances.get_for_current_project()
@@ -516,20 +562,24 @@ local function setup_plug_mappings()
 	vim.keymap.set("n", "<Plug>(OrchestratorSpawnContinueDangerous)", function()
 		M.spawn("continue", { dangerous = true })
 	end, { desc = "Spawn Claude terminal (continue, dangerous mode)" })
+
+	-- Terminal actions
+	vim.keymap.set({ "n", "t" }, "<Plug>(OrchestratorKillCurrentOrPick)", M.kill_current_or_pick, {
+		desc = "Kill current Claude terminal or pick one",
+	})
 end
 
 -- ============================================================
 -- SETUP: Main Entry Point
 -- ============================================================
 
---- Validate configuration and warn about invalid values
---- @param cfg table The merged configuration
-local function validate_config(cfg)
-	if not cfg.keymaps then
-		return
-	end
+--- Validate a keymap section
+--- @param cfg table The merged config
+--- @param section_name string e.g., "prompt_editor" or "terminal"
+--- @param defaults table The default keymaps for this section
+local function validate_keymap_section(cfg, section_name, defaults)
+	local km = cfg.keymaps[section_name]
 
-	local km = cfg.keymaps.prompt_editor
 	if km == nil then
 		return -- nil is valid (will use defaults via fallback)
 	end
@@ -541,12 +591,13 @@ local function validate_config(cfg)
 	if type(km) ~= "table" then
 		vim.notify(
 			string.format(
-				"orchestrator.nvim: keymaps.prompt_editor must be a table or false, got %s. Using defaults.",
+				"orchestrator.nvim: keymaps.%s must be a table or false, got %s. Using defaults.",
+				section_name,
 				type(km)
 			),
 			vim.log.levels.WARN
 		)
-		cfg.keymaps.prompt_editor = default_config.keymaps.prompt_editor
+		cfg.keymaps[section_name] = defaults
 		return
 	end
 
@@ -555,7 +606,8 @@ local function validate_config(cfg)
 		if value ~= false and type(value) ~= "string" then
 			vim.notify(
 				string.format(
-					"orchestrator.nvim: keymaps.prompt_editor.%s must be a string or false, got %s. Ignoring.",
+					"orchestrator.nvim: keymaps.%s.%s must be a string or false, got %s. Ignoring.",
+					section_name,
 					key,
 					type(value)
 				),
@@ -564,6 +616,17 @@ local function validate_config(cfg)
 			km[key] = nil -- Will fall back to default
 		end
 	end
+end
+
+--- Validate configuration and warn about invalid values
+--- @param cfg table The merged configuration
+local function validate_config(cfg)
+	if not cfg.keymaps then
+		return
+	end
+
+	validate_keymap_section(cfg, "prompt_editor", default_config.keymaps.prompt_editor)
+	validate_keymap_section(cfg, "terminal", default_config.keymaps.terminal)
 end
 
 --- Setup function to initialize the plugin
@@ -580,6 +643,7 @@ function M.setup(opts)
 	-- Wire up module dependencies (break circular references)
 	instances.set_status_bar(status_bar)
 	terminal.set_instances(instances)
+	terminal.set_config(config)
 	picker.set_terminal(terminal)
 	editor.set_send_function(M.send_to_terminal)
 	editor.set_config(config)
@@ -606,6 +670,7 @@ local user_commands = {
 	"AgentsSpawn",
 	"AgentsKill",
 	"AgentsFocus",
+	"AgentsClose",
 	"OrchestratorDebug",
 	"OrchestratorReload",
 }
@@ -699,6 +764,14 @@ function M.reload()
 	-- 8. Refresh status bar if instances exist and was visible
 	if #saved_instances > 0 and saved_status_bar_visible then
 		require("orchestrator.status_bar").show()
+	end
+
+	-- 9. Reapply terminal buffer keymaps to existing instances
+	if #saved_instances > 0 then
+		require("orchestrator.terminal").reapply_keybindings_to_existing(
+			saved_instances,
+			orchestrator.kill_current_or_pick
+		)
 	end
 
 	vim.notify("Orchestrator reloaded (" .. #saved_instances .. " instances preserved)", vim.log.levels.INFO)

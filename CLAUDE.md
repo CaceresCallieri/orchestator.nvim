@@ -82,6 +82,16 @@ Uses a hybrid approach:
 
 Keymap config validation in `validate_config()` - values must be string or false (to disable).
 
+### User's Neovim Plugin Configuration
+
+**Location**: `/home/jc/.config/nvim/lua/jc/plugins/orchestrator.lua`
+
+This file contains the user's lazy.nvim plugin spec with global keymaps for orchestrator.nvim.
+
+**IMPORTANT**: When adding, modifying, or removing keymaps/commands in this plugin:
+1. Update the plugin code (`init.lua`, `terminal.lua`, etc.)
+2. **Also update the user's Neovim config** at the path above to add/modify/remove the corresponding keymap binding
+
 ### Status Bar (Winbar) Rendering
 
 Uses native `vim.wo.winbar` with statusline format syntax (`%#Highlight#text`):
