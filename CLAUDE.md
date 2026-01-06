@@ -6,6 +6,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 orchestrator.nvim is a Neovim plugin for orchestrating AI agent terminal workflows with Claude Code. It provides a floating prompt editor for composing multi-line prompts, manages multiple Claude Code terminal instances per project, and displays a visual status bar showing active instances.
 
+## Branching Workflow
+
+**IMPORTANT**: The user's Neovim configuration depends on this plugin directly from the `main` branch. Breaking changes on `main` will immediately affect the user's editor.
+
+- **Always develop on `dev` branch** - All new features, refactors, and experimental changes must be done on `dev`
+- **Only merge to `main` when absolutely certain** - Thoroughly test all changes before merging
+- **If in doubt, stay on `dev`** - It's better to delay a merge than to break the user's Neovim setup
+
+```bash
+# Start new work
+git checkout dev
+
+# When ready to release (after thorough testing)
+git checkout main
+git merge dev
+git push
+```
+
 ## Development Commands
 
 ```bash
