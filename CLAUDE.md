@@ -49,7 +49,8 @@ init.lua (entry point, public API, setup)
     ├── status_bar.lua (winbar status bar) ─── requires state, highlights, instances
     ├── picker.lua (vim.ui.select wrapper) ─── requires instances, highlights, state
     ├── editor.lua (floating prompt editor) ─── requires state
-    └── terminal.lua (spawn/focus/kill) ─── no direct requires
+    ├── terminal.lua (spawn/focus/kill) ─── no direct requires
+    └── spawn_menu.lua (quick spawn menu) ─── requires state, receives terminal via setter
 ```
 
 ### Breaking Circular Dependencies
@@ -59,6 +60,7 @@ The plugin uses setter injection to avoid circular dependencies between modules.
 - `terminal.set_instances(instances)` - terminal registers spawned instances
 - `picker.set_terminal(terminal)` - picker spawns new terminals
 - `editor.set_send_function(M.send_to_terminal)` - editor sends prompts to init's orchestration function
+- `spawn_menu.set_terminal(terminal)` - spawn menu spawns new instances
 
 ### State Management
 
@@ -82,6 +84,7 @@ The plugin uses different UI strategies for its components:
 - **Editor**: Floating window (z=50), 60% width × 40% height, bottom-centered
 - **Status bar**: Native `vim.wo.winbar` applied to all non-floating windows, displays instance bubbles
 - **Picker**: Uses native `vim.ui.select`, integrates with telescope/fzf-lua if available
+- **Spawn menu**: Floating window (z=55), centered, single-key shortcuts for spawning (n/c/r and N/C/R for dangerous mode)
 
 ### Multi-Tab Prompt Editor
 

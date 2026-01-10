@@ -20,6 +20,12 @@ M.state = {
 		visible = true, -- Whether winbar should be shown when instances exist
 	},
 
+	-- Quick spawn menu state (floating window)
+	spawn_menu = {
+		win = nil, -- Window ID of floating spawn menu
+		buf = nil, -- Buffer ID of floating spawn menu
+	},
+
 	-- Claude instance tracking (spawn-controlled)
 	-- Array of: {
 	--   buf = number,           -- Terminal buffer ID
@@ -28,6 +34,7 @@ M.state = {
 	--   cwd = string,           -- Working directory at spawn time
 	--   spawn_type = string,    -- "fresh" | "resume" | "continue"
 	--   spawned_at = number,    -- os.time() timestamp
+	--   dangerous = boolean,    -- Whether spawned with --dangerously-skip-permissions
 	-- }
 	claude_instances = {},
 
@@ -45,6 +52,8 @@ function M.reset()
 	M.state.editor.tabs = {}
 	M.state.editor.current_tab_idx = 1
 	M.state.status_bar.visible = true
+	M.state.spawn_menu.win = nil
+	M.state.spawn_menu.buf = nil
 	M.state.claude_instances = {}
 	M.state.next_color_idx = 1
 	M.state.last_active_buf = nil

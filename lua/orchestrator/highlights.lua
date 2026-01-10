@@ -112,6 +112,17 @@ function M.setup()
 			bold = true,
 		})
 	end
+
+	-- Spawn menu highlight groups
+	vim.api.nvim_set_hl(0, "OrchestratorSpawnMenuKey", {
+		fg = M.instance_colors[2].fg, -- Blue (#6d94e9)
+		bold = true,
+	})
+
+	vim.api.nvim_set_hl(0, "OrchestratorSpawnMenuDanger", {
+		fg = M.colors.yellow, -- Warning yellow (#fdd888)
+		bold = true,
+	})
 end
 
 --- Get highlight group name for active instance (full brightness background)

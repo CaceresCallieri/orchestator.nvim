@@ -49,6 +49,7 @@ local status_bar = require("orchestrator.status_bar")
 local picker = require("orchestrator.picker")
 local editor = require("orchestrator.editor")
 local terminal = require("orchestrator.terminal")
+local spawn_menu = require("orchestrator.spawn_menu")
 
 -- Create autocmd group
 local augroup = vim.api.nvim_create_augroup("Orchestrator", { clear = true })
@@ -250,21 +251,21 @@ end
 function M.focus(num)
 	local project_instances = instances.get_for_current_project()
 
+	-- No instances exist - show spawn menu
 	if #project_instances == 0 then
-		vim.notify("No Claude instances in current project", vim.log.levels.WARN)
+		spawn_menu.show(num)
 		return
 	end
 
+	-- No number provided - show usage
 	if not num then
 		vim.notify("Usage: :AgentsFocus <number> (1-" .. #project_instances .. ")", vim.log.levels.WARN)
 		return
 	end
 
+	-- Instance number out of range - show spawn menu
 	if num < 1 or num > #project_instances then
-		vim.notify(
-			string.format("Invalid instance number %d. Valid range: 1-%d", num, #project_instances),
-			vim.log.levels.WARN
-		)
+		spawn_menu.show(num)
 		return
 	end
 
@@ -647,6 +648,8 @@ function M.setup(opts)
 	picker.set_terminal(terminal)
 	editor.set_send_function(M.send_to_terminal)
 	editor.set_config(config)
+	spawn_menu.set_terminal(terminal)
+	spawn_menu.set_config(config)
 
 	setup_plug_mappings()
 	setup_terminal_autocmds()
@@ -688,6 +691,9 @@ local function cleanup_ui()
 			vim.api.nvim_buf_delete(tab.buf, { force = true })
 		end
 	end
+
+	-- Close spawn menu if open
+	spawn_menu.close()
 
 	-- Hide winbar from all windows
 	status_bar.hide()
@@ -738,6 +744,7 @@ function M.reload()
 		"orchestrator.picker",
 		"orchestrator.editor",
 		"orchestrator.terminal",
+		"orchestrator.spawn_menu",
 	}
 	for _, mod in ipairs(modules) do
 		package.loaded[mod] = nil
