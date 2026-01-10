@@ -18,7 +18,7 @@ local default_config = {
 		-- If these don't work in your terminal, configure custom keymaps via setup()
 		-- or use the <Plug>(OrchestratorXxx) mappings directly.
 		prompt_editor = {
-			send = "<leader><CR>", -- Send prompt to Claude
+			send = "<CR>", -- Send prompt to Claude (normal mode only)
 			close = "<Esc>", -- Close editor (normal mode)
 			next_tab = "<C-Tab>", -- Next prompt tab
 			prev_tab = "<C-S-Tab>", -- Previous prompt tab

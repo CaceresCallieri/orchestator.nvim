@@ -232,13 +232,6 @@ local function setup_buffer_keybindings(buf)
 		end
 	end, "Send prompt to Claude")
 
-	map("i", km.send, function()
-		vim.cmd("stopinsert")
-		if send_to_terminal_fn then
-			send_to_terminal_fn()
-		end
-	end, "Send prompt to Claude")
-
 	-- Close editor (normal mode only)
 	map("n", km.close, function()
 		M.close()
