@@ -260,4 +260,7 @@ function M.get_winbar_string()
 	return build_winbar_string()
 end
 
+-- Export for use by picker
+M.get_instance_title = get_instance_title
+
 return M

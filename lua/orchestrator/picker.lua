@@ -5,6 +5,7 @@
 local instances = require("orchestrator.instances")
 local highlights = require("orchestrator.highlights")
 local state = require("orchestrator.state")
+local status_bar = require("orchestrator.status_bar")
 
 ---@class PickerModule
 local M = {}
@@ -81,15 +82,20 @@ function M.select(callback)
 		end
 		local danger_prefix = inst.dangerous and "⚠ " or ""
 
+		-- Get session title if available
+		local title = status_bar.get_instance_title(inst.buf)
+		local title_part = title and (" - " .. title) or ""
+
 		table.insert(items, {
 			type = "existing",
 			instance = inst,
 			display = string.format(
-				"%s[%d] Claude (%s)%s - %s",
+				"%s[%d] Claude (%s)%s%s - %s",
 				danger_prefix,
 				inst.number,
 				highlights.get_color_name(inst.color_idx),
 				spawn_label,
+				title_part,
 				time_ago
 			),
 		})
