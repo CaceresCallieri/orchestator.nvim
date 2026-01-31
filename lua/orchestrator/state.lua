@@ -31,6 +31,7 @@ M.state = {
 		win = nil, -- Window ID of floating edit picker
 		buf = nil, -- Buffer ID of floating edit picker
 		edits = {}, -- Current edits being displayed (after filtering)
+		closing = nil, -- Re-entrance guard for close_edit_picker
 	},
 
 	-- Claude instance tracking (spawn-controlled)
@@ -64,6 +65,7 @@ function M.reset()
 	M.state.edit_picker.win = nil
 	M.state.edit_picker.buf = nil
 	M.state.edit_picker.edits = {}
+	M.state.edit_picker.closing = nil
 	M.state.claude_instances = {}
 	M.state.next_color_idx = 1
 	M.state.last_active_buf = nil

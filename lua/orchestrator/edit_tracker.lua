@@ -21,6 +21,10 @@ local float_config = {
 	zindex = 55, -- Same as spawn_menu (above editor)
 }
 
+-- Search limits (extracted as constants for readability)
+local HEADER_SEARCH_LIMIT = 1000 -- Max lines to search backwards for edit header
+local CONTENT_MATCH_RANGE = 20 -- Search ±N lines for content match fallback
+
 --- Set the instances module reference (called from init.lua to break circular dep)
 --- @param inst table The instances module
 function M.set_instances(inst)
@@ -39,7 +43,13 @@ end
 
 --- Close the floating edit picker window
 local function close_edit_picker()
-	-- Clear autocmds before closing to prevent double-fire race condition
+	-- Prevent re-entrance from simultaneous WinLeave/BufLeave autocmd firing
+	if state.state.edit_picker.closing then
+		return
+	end
+	state.state.edit_picker.closing = true
+
+	-- Clear autocmds before closing to prevent additional triggers
 	if state.state.edit_picker.buf and vim.api.nvim_buf_is_valid(state.state.edit_picker.buf) then
 		pcall(vim.api.nvim_clear_autocmds, {
 			buffer = state.state.edit_picker.buf,
@@ -56,6 +66,7 @@ local function close_edit_picker()
 	state.state.edit_picker.win = nil
 	state.state.edit_picker.buf = nil
 	state.state.edit_picker.edits = {}
+	state.state.edit_picker.closing = nil -- Reset for next time
 end
 
 --- Build display lines for the edit picker, filtering non-existent files
@@ -235,25 +246,32 @@ end
 -- ============================================================
 
 --- Strip ANSI escape codes from a line
---- Handles CSI sequences (colors, cursor), OSC sequences (title), and extended color codes
+--- Handles SGR sequences (colors, styles), cursor/clear sequences, and OSC sequences
 --- @param line string Input line potentially containing ANSI codes
 --- @return string Cleaned line without ANSI codes
 local function strip_ansi(line)
-	-- CSI sequences: ESC [ <params> <command>
-	-- Covers: colors (m), cursor movement (HABCD), clear (JK), save/restore (su)
-	line = line:gsub("\27%[[0-9;]*[mHABCDJKsu]", "")
+	-- SGR sequences (colors, styles): ESC[...m
+	-- This handles all color codes including 256-color (38;5;N) and truecolor (38;2;R;G;B)
+	line = line:gsub("\27%[[0-9;]*m", "")
 
-	-- OSC sequences: ESC ] ... BEL or ESC ] ... ST
-	-- Used for terminal title, hyperlinks, etc.
+	-- Cursor/clear sequences: ESC[...H/A/B/C/D/J/K/s/u
+	line = line:gsub("\27%[[0-9;]*[HABCDJKsu]", "")
+
+	-- OSC sequences (title, hyperlinks): ESC]...BEL or ESC]...ST
 	line = line:gsub("\27%][^\7\27]*\7", "") -- BEL terminator
 	line = line:gsub("\27%][^\27]*\27\\", "") -- ST terminator (ESC \)
 
-	-- Extended color sequences (256-color and true color)
-	-- Format: ESC[38;5;Nm or ESC[48;5;Nm (256-color)
-	-- Format: ESC[38;2;R;G;Bm or ESC[48;2;R;G;Bm (true color)
-	line = line:gsub("\27%[[34]8;[25];[0-9;]*m", "")
+	-- Single-char escape sequences (save/restore cursor: ESC 7 and ESC 8)
+	line = line:gsub("\27[78]", "")
 
 	return line
+end
+
+--- Normalize a line for content comparison (trim leading/trailing whitespace)
+--- @param str string Input string
+--- @return string Normalized string
+local function normalize_for_match(str)
+	return str:gsub("^%s+", ""):gsub("%s+$", "")
 end
 
 --- Parse a single line for operation start (Update/Edit/Write)
@@ -288,7 +306,7 @@ local function parse_summary_line(line)
 	return nil, nil
 end
 
---- Parse diff line for line number
+--- Parse diff line for line number (simple version for edit detection)
 --- @param line string The cleaned line to parse
 --- @return number|nil line_number The line number from the diff
 local function parse_diff_line(line)
@@ -298,6 +316,43 @@ local function parse_diff_line(line)
 	if line_num then
 		return tonumber(line_num)
 	end
+	return nil
+end
+
+--- Parse a diff line and extract full information for cursor positioning
+--- Handles diff lines with +/- indicators AND context lines (no indicator)
+--- @param line string Cleaned line (ANSI stripped)
+--- @return table|nil result {line_num, indicator, prefix_len}
+local function parse_diff_line_full(line)
+	-- First try: Match lines with +/- indicator
+	-- Pattern: (leading_ws)(line_num)(mid_ws)(indicator +/-)
+	local leading_ws, line_num, mid_ws, indicator = line:match("^(%s*)(%d+)(%s+)([%+%-])")
+
+	if line_num then
+		-- Prefix = leading whitespace + line number + middle whitespace + indicator
+		local prefix_len = #leading_ws + #line_num + #mid_ws + 1
+		return {
+			line_num = tonumber(line_num),
+			indicator = indicator,
+			prefix_len = prefix_len,
+		}
+	end
+
+	-- Second try: Match context lines (no +/- indicator, just whitespace after line number)
+	-- These show unchanged lines for context in the diff
+	-- Pattern: leading_ws + line_num + whitespace (at least 2 spaces to distinguish from regular text)
+	leading_ws, line_num, mid_ws = line:match("^(%s*)(%d+)(%s%s+)")
+
+	if line_num then
+		-- For context lines, prefix = leading whitespace + line number + middle whitespace
+		local prefix_len = #leading_ws + #line_num + #mid_ws
+		return {
+			line_num = tonumber(line_num),
+			indicator = " ", -- context line indicator
+			prefix_len = prefix_len,
+		}
+	end
+
 	return nil
 end
 
@@ -319,6 +374,34 @@ local function resolve_filepath(filepath, cwd)
 
 	-- Relative path - join with cwd and normalize (handles ../ properly)
 	return vim.fn.fnamemodify(cwd .. "/" .. filepath, ":p")
+end
+
+--- Search backwards from current line to find edit header (● Update/Edit/Write)
+--- @param buf number Buffer ID
+--- @param start_line number Line to start searching from (0-indexed)
+--- @param cwd string Working directory for path resolution
+--- @return string|nil filepath The resolved file path, or nil if not found
+local function find_edit_header_backwards(buf, start_line, cwd)
+	-- Limit search to prevent scanning entire large terminal buffer
+	local search_start = math.max(0, start_line - HEADER_SEARCH_LIMIT)
+
+	local lines = vim.api.nvim_buf_get_lines(buf, search_start, start_line + 1, false)
+
+	-- Search from end (current line) backwards to find most recent header
+	for i = #lines, 1, -1 do
+		local line = lines[i]
+		-- Quick check: only strip ANSI if line might contain header marker
+		-- This avoids expensive regex on every line in long buffers
+		if line:find("●", 1, true) then
+			local clean_line = strip_ansi(line)
+			local op, filepath = parse_operation_line(clean_line)
+			if op and filepath then
+				return resolve_filepath(filepath, cwd)
+			end
+		end
+	end
+
+	return nil
 end
 
 -- ============================================================
@@ -527,6 +610,157 @@ function M.jump_to_last_edit(num)
 	if edits then
 		process_edits(edits)
 	end
+end
+
+--- Jump to source file location from a diff line under cursor
+--- Works only in Claude terminal buffers in NORMAL mode
+--- Parses the diff line to extract line number and calculates exact column position
+--- @return boolean success True if jump was successful
+function M.jump_to_diff_location()
+	if not instances then
+		vim.notify("Edit tracker not initialized", vim.log.levels.ERROR)
+		return false
+	end
+
+	-- Verify we're in a Claude terminal buffer
+	local current_buf = vim.api.nvim_get_current_buf()
+	local instance = instances.get_by_buf(current_buf)
+
+	if not instance then
+		vim.notify("Not in a Claude terminal buffer", vim.log.levels.WARN)
+		return false
+	end
+
+	-- Get cursor position (1-indexed line, 0-indexed column)
+	local cursor = vim.api.nvim_win_get_cursor(0)
+	local cursor_line = cursor[1] - 1 -- Convert to 0-indexed for buf_get_lines
+	local cursor_col = cursor[2] -- Already 0-indexed
+
+	-- Get the current line
+	local lines = vim.api.nvim_buf_get_lines(current_buf, cursor_line, cursor_line + 1, false)
+	if #lines == 0 then
+		vim.notify("Could not read current line", vim.log.levels.ERROR)
+		return false
+	end
+
+	local raw_line = lines[1]
+	local clean_line = strip_ansi(raw_line)
+
+	-- First, check if cursor is on a header line (● Update/Edit/Write)
+	local op, filepath = parse_operation_line(clean_line)
+	if op and filepath then
+		local resolved_path = resolve_filepath(filepath, instance.cwd)
+		if vim.fn.filereadable(resolved_path) ~= 1 then
+			vim.notify("File not found: " .. resolved_path, vim.log.levels.ERROR)
+			return false
+		end
+
+		-- Jump to file at line 1, column 0
+		local target_buf = vim.fn.bufadd(resolved_path)
+		vim.fn.bufload(target_buf)
+		vim.api.nvim_set_current_buf(target_buf)
+		vim.api.nvim_win_set_cursor(0, { 1, 0 })
+		vim.cmd("normal! zz")
+
+		vim.notify(string.format("Jumped to %s:1", vim.fn.fnamemodify(resolved_path, ":t")), vim.log.levels.INFO)
+		return true
+	end
+
+	-- Check if cursor is on a diff line
+	local diff_info = parse_diff_line_full(clean_line)
+	if not diff_info then
+		vim.notify("Cursor not on a diff line", vim.log.levels.WARN)
+		return false
+	end
+
+	-- Search backwards for the edit header to get the file path
+	local header_filepath = find_edit_header_backwards(current_buf, cursor_line, instance.cwd)
+	if not header_filepath then
+		vim.notify("Could not find edit header (● Update/Edit/Write)", vim.log.levels.WARN)
+		return false
+	end
+
+	-- Verify file exists
+	if vim.fn.filereadable(header_filepath) ~= 1 then
+		vim.notify("File not found: " .. header_filepath, vim.log.levels.ERROR)
+		return false
+	end
+
+	-- Calculate source column by subtracting prefix length
+	local source_col = math.max(0, cursor_col - diff_info.prefix_len)
+
+	-- Open file and jump to location
+	local target_buf = vim.fn.bufadd(header_filepath)
+	vim.fn.bufload(target_buf)
+	vim.api.nvim_set_current_buf(target_buf)
+
+	-- Clamp line number to file length
+	local file_lines = vim.api.nvim_buf_line_count(target_buf)
+	local target_line = math.min(diff_info.line_num, file_lines)
+
+	-- Extract the expected content from the diff line (after the prefix)
+	local expected_content = clean_line:sub(diff_info.prefix_len + 1)
+
+	-- Get actual content at target line
+	local target_line_content = vim.api.nvim_buf_get_lines(target_buf, target_line - 1, target_line, false)[1] or ""
+
+	-- Content matching: if the line doesn't match, search nearby
+	-- This handles multi-edit scenarios where line numbers shift
+	-- Uses normalized comparison to handle whitespace differences
+	local original_target = target_line
+	local content_mismatch = false
+	local expected_normalized = normalize_for_match(expected_content)
+
+	if normalize_for_match(target_line_content) ~= expected_normalized and expected_content:match("%S") then
+		content_mismatch = true
+		local start_search = math.max(1, target_line - CONTENT_MATCH_RANGE)
+		local end_search = math.min(file_lines, target_line + CONTENT_MATCH_RANGE)
+		local nearby_lines = vim.api.nvim_buf_get_lines(target_buf, start_search - 1, end_search, false)
+
+		for i, line in ipairs(nearby_lines) do
+			if normalize_for_match(line) == expected_normalized then
+				target_line = start_search + i - 1
+				target_line_content = line
+				break
+			end
+		end
+	end
+
+	-- Notify user if file state differs from edit (line numbers shifted)
+	if content_mismatch then
+		local offset = target_line - original_target
+		if offset ~= 0 then
+			vim.notify(
+				string.format("File changed since edit: adjusted %+d lines", offset),
+				vim.log.levels.INFO
+			)
+		else
+			vim.notify(
+				"File changed since edit: content not found nearby",
+				vim.log.levels.WARN
+			)
+		end
+	end
+
+	-- Clamp column to line length
+	-- Note: cursor positions in Neovim are byte offsets, and #string gives byte length,
+	-- so byte-based clamping is correct for nvim_win_set_cursor
+	local target_col = math.min(source_col, math.max(0, #target_line_content - 1))
+
+	-- Handle empty lines
+	if #target_line_content == 0 then
+		target_col = 0
+	end
+
+	vim.api.nvim_win_set_cursor(0, { target_line, target_col })
+	vim.cmd("normal! zz")
+
+	vim.notify(
+		string.format("Jumped to %s:%d:%d", vim.fn.fnamemodify(header_filepath, ":t"), target_line, target_col + 1),
+		vim.log.levels.INFO
+	)
+
+	return true
 end
 
 --- Close the edit picker if open (public API for cleanup)

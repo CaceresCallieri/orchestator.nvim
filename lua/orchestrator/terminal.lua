@@ -9,6 +9,10 @@ local M = {}
 ---@type table|nil
 local instances = nil
 
+-- Forward declaration for jump_to_diff function (set via setter from init.lua)
+---@type function|nil
+local jump_to_diff_fn = nil
+
 -- Plugin configuration (set via setter from init.lua)
 ---@type table
 local terminal_config = {}
@@ -28,6 +32,12 @@ end
 --- @param cfg table The plugin configuration
 function M.set_config(cfg)
 	terminal_config = cfg
+end
+
+--- Set the jump_to_diff function (called from init.lua to break circular dep)
+--- @param fn function The jump_to_diff_location function from edit_tracker
+function M.set_jump_to_diff_fn(fn)
+	jump_to_diff_fn = fn
 end
 
 --- Set up buffer-local keybindings for Claude terminal
@@ -50,6 +60,18 @@ local function setup_terminal_keybindings(buf, kill_fn)
 			noremap = true,
 			silent = true,
 			desc = "Close Claude instance",
+		})
+	end
+
+	-- Jump to source from diff line (normal mode only)
+	if km.jump_to_diff and km.jump_to_diff ~= false and jump_to_diff_fn then
+		vim.keymap.set("n", km.jump_to_diff, function()
+			jump_to_diff_fn()
+		end, {
+			buffer = buf,
+			noremap = true,
+			silent = true,
+			desc = "Jump to source from diff line",
 		})
 	end
 end

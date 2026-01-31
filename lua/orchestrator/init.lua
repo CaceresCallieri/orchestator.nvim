@@ -28,6 +28,7 @@ local default_config = {
 		-- Buffer-local keymaps for Claude terminal buffers (set to false to disable)
 		terminal = {
 			close = "<C-S-q>", -- Close current Claude instance
+			jump_to_diff = "gd", -- Jump to source file from diff line
 		},
 	},
 	-- Dangerous mode configuration (--dangerously-skip-permissions)
@@ -294,6 +295,13 @@ function M.close_edit_picker()
 	edit_tracker.close_picker()
 end
 
+--- Jump to source file location from diff line under cursor
+--- Only works when cursor is in a Claude terminal buffer in normal mode
+--- @return boolean success True if jump was successful
+function M.jump_to_diff_location()
+	return edit_tracker.jump_to_diff_location()
+end
+
 -- ============================================================
 -- CORE: Send to Terminal
 -- ============================================================
@@ -551,6 +559,12 @@ local function setup_user_commands()
 		desc = "Close Claude edits picker window",
 	})
 
+	vim.api.nvim_create_user_command("AgentsDiffJump", function()
+		M.jump_to_diff_location()
+	end, {
+		desc = "Jump to source file from diff line in Claude terminal",
+	})
+
 	vim.api.nvim_create_user_command("OrchestratorDebug", function()
 		local all = instances.get_all()
 		local project = instances.get_for_current_project()
@@ -634,6 +648,9 @@ local function setup_plug_mappings()
 	vim.keymap.set("n", "<Plug>(OrchestratorJumpLastEdit)", M.jump_to_last_edit, {
 		desc = "Jump to most recent Claude edit",
 	})
+	vim.keymap.set("n", "<Plug>(OrchestratorJumpToDiff)", M.jump_to_diff_location, {
+		desc = "Jump to source from diff line in terminal",
+	})
 end
 
 -- ============================================================
@@ -711,6 +728,7 @@ function M.setup(opts)
 	instances.set_status_bar(status_bar)
 	terminal.set_instances(instances)
 	terminal.set_config(config)
+	terminal.set_jump_to_diff_fn(edit_tracker.jump_to_diff_location)
 	picker.set_terminal(terminal)
 	editor.set_send_function(M.send_to_terminal)
 	editor.set_config(config)
@@ -745,6 +763,7 @@ local user_commands = {
 	"AgentsEdits",
 	"AgentsJump",
 	"AgentsEditsClose",
+	"AgentsDiffJump",
 	"OrchestratorDebug",
 	"OrchestratorReload",
 }
