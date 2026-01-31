@@ -1,11 +1,11 @@
 -- Picker Module
 -- Unified terminal selection UI for spawning and selecting Claude instances
 -- Shows existing instances at top, spawn options below
+-- Uses Telescope when available, falls back to vim.ui.select
 
 local instances = require("orchestrator.instances")
-local highlights = require("orchestrator.highlights")
 local state = require("orchestrator.state")
-local status_bar = require("orchestrator.status_bar")
+local picker_utils = require("orchestrator.picker_utils")
 
 ---@class PickerModule
 local M = {}
@@ -14,91 +14,50 @@ local M = {}
 ---@type table|nil
 local terminal = nil
 
+-- Cache telescope availability at module load time
+-- Validates both telescope core and our telescope_picker module exist
+local telescope_available = (function()
+	local telescope_ok = pcall(require, "telescope")
+	if not telescope_ok then
+		return false
+	end
+	local picker_ok = pcall(require, "orchestrator.telescope_picker")
+	return picker_ok
+end)()
+
 --- Set the terminal module reference (called from init.lua)
 --- @param term table The terminal module
 function M.set_terminal(term)
 	terminal = term
 end
 
---- Format timestamp as relative time
---- @param timestamp number Unix timestamp
---- @return string Formatted string like "2m ago", "1h ago"
-local function format_time_ago(timestamp)
-	if not timestamp then
-		return ""
-	end
-
-	local diff = os.time() - timestamp
-
-	if diff < 60 then
-		return "just now"
-	elseif diff < 3600 then
-		return string.format("%dm ago", math.floor(diff / 60))
-	elseif diff < 86400 then
-		return string.format("%dh ago", math.floor(diff / 3600))
-	else
-		return string.format("%dd ago", math.floor(diff / 86400))
-	end
-end
-
---- Show unified picker for Claude instances and spawn options
---- Displays existing instances first, then spawn options for current project
+--- Internal fallback picker using vim.ui.select (no colors)
+--- Used when Telescope is unavailable or fails to load
 --- @param callback function Called with selected terminal {buf, job_id, win, is_new}
-function M.select(callback)
-	if not terminal then
-		vim.notify("Terminal module not initialized", vim.log.levels.ERROR)
-		return
-	end
-
+local function select_fallback(callback)
 	local project_instances = instances.get_for_current_project()
 	local items = {}
 
-	-- Prioritize the last active Claude instance (tracked via WinEnter/BufEnter)
+	-- Single-pass prioritization: build items and find last active in one loop
 	local last_active_buf = state.state.last_active_buf
-	if last_active_buf then
-		local last_active_idx = nil
-		for i, inst in ipairs(project_instances) do
-			if inst.buf == last_active_buf then
-				last_active_idx = i
-				break
-			end
-		end
+	local last_active_item = nil
 
-		-- Move last active instance to the front if found and not already first
-		if last_active_idx and last_active_idx > 1 then
-			local active_inst = table.remove(project_instances, last_active_idx)
-			table.insert(project_instances, 1, active_inst)
+	for _, inst in ipairs(project_instances) do
+		local item = {
+			type = "existing",
+			instance = inst,
+			display = string.format("● %s", picker_utils.build_instance_text(inst)),
+		}
+		if inst.buf == last_active_buf then
+			last_active_item = item
+		else
+			table.insert(items, item)
 		end
 	end
 
-	-- Section 1: Existing instances (current project only)
-	for _, inst in ipairs(project_instances) do
-		local time_ago = format_time_ago(inst.spawned_at)
-		local spawn_label = ""
-		if inst.spawn_type == "resume" then
-			spawn_label = " [resumed]"
-		elseif inst.spawn_type == "continue" then
-			spawn_label = " [continued]"
-		end
-		local danger_prefix = inst.dangerous and "⚠ " or ""
-
-		-- Get session title if available
-		local title = status_bar.get_instance_title(inst.buf)
-		local title_part = title and (" - " .. title) or ""
-
-		table.insert(items, {
-			type = "existing",
-			instance = inst,
-			display = string.format(
-				"%s[%d] Claude (%s)%s%s - %s",
-				danger_prefix,
-				inst.number,
-				highlights.get_color_name(inst.color_idx),
-				spawn_label,
-				title_part,
-				time_ago
-			),
-		})
+	-- Insert last active at front if found
+	if last_active_item then
+		table.insert(items, 1, last_active_item)
 	end
 
 	-- Section 2: Spawn new options (in consistent order)
@@ -145,8 +104,31 @@ function M.select(callback)
 	end)
 end
 
+--- Show unified picker for Claude instances and spawn options
+--- Displays existing instances first, then spawn options for current project
+--- Uses Telescope when available for colored dots, falls back to vim.ui.select
+--- @param callback function Called with selected terminal {buf, job_id, win, is_new}
+function M.select(callback)
+	if not terminal then
+		vim.notify("Terminal module not initialized", vim.log.levels.ERROR)
+		return
+	end
+
+	-- Use Telescope picker if available (supports colored dots)
+	if telescope_available then
+		local telescope_picker = require("orchestrator.telescope_picker")
+		telescope_picker.set_terminal(terminal)
+		telescope_picker.set_fallback(select_fallback)
+		return telescope_picker.select(callback)
+	end
+
+	-- Fallback to vim.ui.select (no colors, but uses ● symbol)
+	select_fallback(callback)
+end
+
 --- Show picker for existing instances only (no spawn options)
 --- Used when you specifically want to select from existing terminals
+--- Uses Telescope when available for colored dots, falls back to vim.ui.select
 --- @param callback function Called with selected instance {buf, job_id, win}
 function M.select_existing(callback)
 	local project_instances = instances.get_for_current_project()
@@ -156,19 +138,18 @@ function M.select_existing(callback)
 		return
 	end
 
+	-- Use Telescope picker if available (supports colored dots)
+	if telescope_available then
+		local telescope_picker = require("orchestrator.telescope_picker")
+		return telescope_picker.select_existing(callback)
+	end
+
+	-- Fallback to vim.ui.select (no colors, but uses ● symbol)
 	local items = {}
 	for _, inst in ipairs(project_instances) do
-		local time_ago = format_time_ago(inst.spawned_at)
-		local danger_prefix = inst.dangerous and "⚠ " or ""
 		table.insert(items, {
 			instance = inst,
-			display = string.format(
-				"%s[%d] Claude (%s) - %s",
-				danger_prefix,
-				inst.number,
-				highlights.get_color_name(inst.color_idx),
-				time_ago
-			),
+			display = string.format("● %s", picker_utils.build_instance_text(inst)),
 		})
 	end
 
@@ -178,13 +159,15 @@ function M.select_existing(callback)
 			return item.display
 		end,
 	}, function(choice)
-		if choice then
-			callback({
-				buf = choice.instance.buf,
-				job_id = choice.instance.job_id,
-				win = choice.instance.win,
-			})
+		if not choice then
+			return
 		end
+
+		callback({
+			buf = choice.instance.buf,
+			job_id = choice.instance.job_id,
+			win = choice.instance.win,
+		})
 	end)
 end
 

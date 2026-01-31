@@ -260,7 +260,8 @@ function M.get_winbar_string()
 	return build_winbar_string()
 end
 
--- Export for use by picker
+-- Public API: Used by picker_utils for session title display in picker items
+-- This function is intentionally exported as part of the module's public interface
 M.get_instance_title = get_instance_title
 
 return M
