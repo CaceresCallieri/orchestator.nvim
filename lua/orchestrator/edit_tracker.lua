@@ -686,13 +686,29 @@ function M.jump_to_diff_location()
 		return false
 	end
 
-	-- Calculate source column by subtracting prefix length
-	local source_col = math.max(0, cursor_col - diff_info.prefix_len)
-
-	-- Open file and jump to location
+	-- Open file (needed for both deleted and normal lines)
 	local target_buf = vim.fn.bufadd(header_filepath)
 	vim.fn.bufload(target_buf)
 	vim.api.nvim_set_current_buf(target_buf)
+
+	-- Handle deleted lines: content no longer exists in the file
+	if diff_info.indicator == "-" then
+		-- Jump to the original line number (clamped to file bounds)
+		local file_lines = vim.api.nvim_buf_line_count(target_buf)
+		local target_line = math.min(diff_info.line_num, file_lines)
+
+		vim.api.nvim_win_set_cursor(0, { target_line, 0 })
+		vim.cmd("normal! zz")
+
+		vim.notify(
+			string.format("Line was deleted - jumped to %s:%d", vim.fn.fnamemodify(header_filepath, ":t"), target_line),
+			vim.log.levels.INFO
+		)
+		return true
+	end
+
+	-- Calculate source column by subtracting prefix length
+	local source_col = math.max(0, cursor_col - diff_info.prefix_len)
 
 	-- Clamp line number to file length
 	local file_lines = vim.api.nvim_buf_line_count(target_buf)
