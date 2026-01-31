@@ -50,6 +50,7 @@ local picker = require("orchestrator.picker")
 local editor = require("orchestrator.editor")
 local terminal = require("orchestrator.terminal")
 local spawn_menu = require("orchestrator.spawn_menu")
+local edit_tracker = require("orchestrator.edit_tracker")
 
 -- Create autocmd group
 local augroup = vim.api.nvim_create_augroup("Orchestrator", { clear = true })
@@ -273,6 +274,27 @@ function M.focus(num)
 end
 
 -- ============================================================
+-- PUBLIC API: Edit Tracker Functions
+-- ============================================================
+
+--- Show all edits from Claude in quickfix list
+--- @param num number|nil Instance number (1-indexed, within current project)
+function M.show_edits(num)
+	edit_tracker.show_edits(num)
+end
+
+--- Jump to the most recent edit location
+--- @param num number|nil Instance number (1-indexed, within current project)
+function M.jump_to_last_edit(num)
+	edit_tracker.jump_to_last_edit(num)
+end
+
+--- Close the edit picker if open
+function M.close_edit_picker()
+	edit_tracker.close_picker()
+end
+
+-- ============================================================
 -- CORE: Send to Terminal
 -- ============================================================
 
@@ -493,6 +515,42 @@ local function setup_user_commands()
 		desc = "Close current Claude instance or pick one",
 	})
 
+	vim.api.nvim_create_user_command("AgentsEdits", function(opts)
+		local num = nil
+		if opts.args ~= "" then
+			num = tonumber(opts.args)
+			if not num then
+				vim.notify("Instance number must be a number", vim.log.levels.ERROR)
+				return
+			end
+		end
+		M.show_edits(num)
+	end, {
+		desc = "Show Claude edits in quickfix list",
+		nargs = "?",
+	})
+
+	vim.api.nvim_create_user_command("AgentsJump", function(opts)
+		local num = nil
+		if opts.args ~= "" then
+			num = tonumber(opts.args)
+			if not num then
+				vim.notify("Instance number must be a number", vim.log.levels.ERROR)
+				return
+			end
+		end
+		M.jump_to_last_edit(num)
+	end, {
+		desc = "Jump to most recent Claude edit",
+		nargs = "?",
+	})
+
+	vim.api.nvim_create_user_command("AgentsEditsClose", function()
+		edit_tracker.close_picker()
+	end, {
+		desc = "Close Claude edits picker window",
+	})
+
 	vim.api.nvim_create_user_command("OrchestratorDebug", function()
 		local all = instances.get_all()
 		local project = instances.get_for_current_project()
@@ -567,6 +625,14 @@ local function setup_plug_mappings()
 	-- Terminal actions
 	vim.keymap.set({ "n", "t" }, "<Plug>(OrchestratorKillCurrentOrPick)", M.kill_current_or_pick, {
 		desc = "Kill current Claude terminal or pick one",
+	})
+
+	-- Edit tracker actions
+	vim.keymap.set("n", "<Plug>(OrchestratorShowEdits)", M.show_edits, {
+		desc = "Show Claude edits in quickfix",
+	})
+	vim.keymap.set("n", "<Plug>(OrchestratorJumpLastEdit)", M.jump_to_last_edit, {
+		desc = "Jump to most recent Claude edit",
 	})
 end
 
@@ -650,6 +716,8 @@ function M.setup(opts)
 	editor.set_config(config)
 	spawn_menu.set_terminal(terminal)
 	spawn_menu.set_config(config)
+	edit_tracker.set_instances(instances)
+	edit_tracker.set_picker(picker)
 
 	setup_plug_mappings()
 	setup_terminal_autocmds()
@@ -674,6 +742,9 @@ local user_commands = {
 	"AgentsKill",
 	"AgentsFocus",
 	"AgentsClose",
+	"AgentsEdits",
+	"AgentsJump",
+	"AgentsEditsClose",
 	"OrchestratorDebug",
 	"OrchestratorReload",
 }
@@ -694,6 +765,9 @@ local function cleanup_ui()
 
 	-- Close spawn menu if open
 	spawn_menu.close()
+
+	-- Close edit picker if open
+	edit_tracker.close_picker()
 
 	-- Hide winbar from all windows
 	status_bar.hide()
@@ -745,6 +819,7 @@ function M.reload()
 		"orchestrator.editor",
 		"orchestrator.terminal",
 		"orchestrator.spawn_menu",
+		"orchestrator.edit_tracker",
 	}
 	for _, mod in ipairs(modules) do
 		package.loaded[mod] = nil
