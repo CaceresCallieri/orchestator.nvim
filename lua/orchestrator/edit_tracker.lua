@@ -405,6 +405,201 @@ local function find_edit_header_backwards(buf, start_line, cwd)
 end
 
 -- ============================================================
+-- JUMP-TO-DIFF HELPERS
+-- ============================================================
+
+--- @class JumpContext
+--- @field buf number Terminal buffer ID
+--- @field instance table Claude instance with cwd
+--- @field cursor_line number 0-indexed line number
+--- @field cursor_col number 0-indexed column number
+--- @field clean_line string ANSI-stripped line content
+
+--- Validate that jump can be performed from current context
+--- @return JumpContext|nil context Context table or nil on failure
+local function validate_jump_context()
+	if not instances then
+		vim.notify("Edit tracker not initialized", vim.log.levels.ERROR)
+		return nil
+	end
+
+	-- Verify we're in a Claude terminal buffer
+	local current_buf = vim.api.nvim_get_current_buf()
+	local instance = instances.get_by_buf(current_buf)
+
+	if not instance then
+		vim.notify("Not in a Claude terminal buffer", vim.log.levels.WARN)
+		return nil
+	end
+
+	-- Get cursor position (1-indexed line, 0-indexed column)
+	local cursor = vim.api.nvim_win_get_cursor(0)
+	local cursor_line = cursor[1] - 1 -- Convert to 0-indexed for buf_get_lines
+	local cursor_col = cursor[2] -- Already 0-indexed
+
+	-- Get the current line
+	local lines = vim.api.nvim_buf_get_lines(current_buf, cursor_line, cursor_line + 1, false)
+	if #lines == 0 then
+		vim.notify("Could not read current line", vim.log.levels.ERROR)
+		return nil
+	end
+
+	local raw_line = lines[1]
+	local clean_line = strip_ansi(raw_line)
+
+	return {
+		buf = current_buf,
+		instance = instance,
+		cursor_line = cursor_line,
+		cursor_col = cursor_col,
+		clean_line = clean_line,
+	}
+end
+
+--- @class HeaderJumpResult
+--- @field handled boolean Whether this was a header line
+--- @field success boolean Whether jump succeeded (only valid if handled)
+
+--- Attempt to jump if cursor is on an edit header line (● Update/Edit/Write)
+--- @param clean_line string ANSI-stripped line content
+--- @param instance table Claude instance with cwd
+--- @return HeaderJumpResult result {handled=true/false, success=true/false}
+local function try_jump_to_header_line(clean_line, instance)
+	local op, filepath = parse_operation_line(clean_line)
+	if not op or not filepath then
+		return { handled = false, success = false }
+	end
+
+	local resolved_path = resolve_filepath(filepath, instance.cwd)
+	if vim.fn.filereadable(resolved_path) ~= 1 then
+		vim.notify("File not found: " .. resolved_path, vim.log.levels.ERROR)
+		return { handled = true, success = false }
+	end
+
+	-- Jump to file at line 1, column 0
+	local target_buf = vim.fn.bufadd(resolved_path)
+	vim.fn.bufload(target_buf)
+	vim.api.nvim_set_current_buf(target_buf)
+	vim.api.nvim_win_set_cursor(0, { 1, 0 })
+	vim.cmd("normal! zz")
+
+	vim.notify(string.format("Jumped to %s:1", vim.fn.fnamemodify(resolved_path, ":t")), vim.log.levels.INFO)
+	return { handled = true, success = true }
+end
+
+--- Find target file by searching backwards for edit header
+--- @param buf number Terminal buffer ID
+--- @param cursor_line number 0-indexed cursor line
+--- @param instance table Claude instance with cwd
+--- @return string|nil filepath Resolved filepath or nil if header not found
+local function find_target_file(buf, cursor_line, instance)
+	local header_filepath = find_edit_header_backwards(buf, cursor_line, instance.cwd)
+	if not header_filepath then
+		vim.notify("Could not find edit header (● Update/Edit/Write)", vim.log.levels.WARN)
+		return nil
+	end
+	return header_filepath
+end
+
+--- Handle jump for deleted lines (- indicator)
+--- @param target_buf number Target file buffer
+--- @param filepath string Target file path
+--- @param diff_info table Parsed diff info with line_num
+--- @return boolean success Always returns true
+local function handle_deleted_line_jump(target_buf, filepath, diff_info)
+	local file_lines = vim.api.nvim_buf_line_count(target_buf)
+	local target_line = math.min(diff_info.line_num, file_lines)
+
+	vim.api.nvim_win_set_cursor(0, { target_line, 0 })
+	vim.cmd("normal! zz")
+
+	vim.notify(
+		string.format("Line was deleted - jumped to %s:%d", vim.fn.fnamemodify(filepath, ":t"), target_line),
+		vim.log.levels.INFO
+	)
+	return true
+end
+
+--- Search nearby lines for matching content when line numbers have shifted
+--- @param target_buf number Target file buffer
+--- @param expected_content string Expected line content (after diff prefix)
+--- @param target_line number Original target line number (1-indexed)
+--- @param file_lines number Total lines in file
+--- @return number adjusted_line The found or original line number
+--- @return boolean content_mismatch Whether content was not found at original position
+local function search_content_nearby(target_buf, expected_content, target_line, file_lines)
+	-- Clamp target_line to valid range
+	target_line = math.max(1, math.min(target_line, file_lines))
+
+	local target_line_content = vim.api.nvim_buf_get_lines(target_buf, target_line - 1, target_line, false)[1] or ""
+	local expected_normalized = normalize_for_match(expected_content)
+
+	-- For whitespace-only content, skip search (unreliable for matching)
+	if expected_normalized == "" then
+		return target_line, false
+	end
+
+	-- Check if content matches at expected position
+	if normalize_for_match(target_line_content) == expected_normalized then
+		return target_line, false
+	end
+
+	-- Content mismatch - search nearby
+	local start_search = math.max(1, target_line - CONTENT_MATCH_RANGE)
+	local end_search = math.min(file_lines, target_line + CONTENT_MATCH_RANGE)
+	local nearby_lines = vim.api.nvim_buf_get_lines(target_buf, start_search - 1, end_search, false)
+
+	for i, line in ipairs(nearby_lines) do
+		if normalize_for_match(line) == expected_normalized then
+			return start_search + i - 1, true
+		end
+	end
+
+	return target_line, true -- Content not found nearby, return original
+end
+
+--- Notify user about content shift if applicable
+--- @param original_line number Original target line
+--- @param adjusted_line number Adjusted line after search
+--- @param content_mismatch boolean Whether content didn't match original position
+local function notify_content_shift(original_line, adjusted_line, content_mismatch)
+	if not content_mismatch then
+		return
+	end
+
+	local offset = adjusted_line - original_line
+	if offset ~= 0 then
+		vim.notify(
+			string.format("File changed since edit: adjusted %+d lines", offset),
+			vim.log.levels.INFO
+		)
+	else
+		vim.notify(
+			"File changed since edit: content not found nearby",
+			vim.log.levels.WARN
+		)
+	end
+end
+
+--- Calculate final cursor position with proper clamping
+--- @param target_line number Target line number (1-indexed)
+--- @param source_col number Source column from diff (0-indexed)
+--- @param line_content string Content of the target line (passed to avoid redundant read)
+--- @return number line Line number (unchanged)
+--- @return number col Clamped column number
+local function calculate_cursor_position(target_line, source_col, line_content)
+	-- Handle empty lines
+	if #line_content == 0 then
+		return target_line, 0
+	end
+
+	-- Clamp column to line length (byte-based for nvim_win_set_cursor)
+	-- Valid positions are 0 to #content (cursor can be at end of line)
+	local target_col = math.min(source_col, #line_content)
+	return target_line, target_col
+end
+
+-- ============================================================
 -- BUFFER PARSING
 -- ============================================================
 
@@ -617,165 +812,69 @@ end
 --- Parses the diff line to extract line number and calculates exact column position
 --- @return boolean success True if jump was successful
 function M.jump_to_diff_location()
-	if not instances then
-		vim.notify("Edit tracker not initialized", vim.log.levels.ERROR)
+	-- 1. Validate context
+	local ctx = validate_jump_context()
+	if not ctx then
 		return false
 	end
 
-	-- Verify we're in a Claude terminal buffer
-	local current_buf = vim.api.nvim_get_current_buf()
-	local instance = instances.get_by_buf(current_buf)
-
-	if not instance then
-		vim.notify("Not in a Claude terminal buffer", vim.log.levels.WARN)
-		return false
+	-- 2. Try header line jump first (● Update/Edit/Write)
+	local header_result = try_jump_to_header_line(ctx.clean_line, ctx.instance)
+	if header_result.handled then
+		return header_result.success
 	end
 
-	-- Get cursor position (1-indexed line, 0-indexed column)
-	local cursor = vim.api.nvim_win_get_cursor(0)
-	local cursor_line = cursor[1] - 1 -- Convert to 0-indexed for buf_get_lines
-	local cursor_col = cursor[2] -- Already 0-indexed
-
-	-- Get the current line
-	local lines = vim.api.nvim_buf_get_lines(current_buf, cursor_line, cursor_line + 1, false)
-	if #lines == 0 then
-		vim.notify("Could not read current line", vim.log.levels.ERROR)
-		return false
-	end
-
-	local raw_line = lines[1]
-	local clean_line = strip_ansi(raw_line)
-
-	-- First, check if cursor is on a header line (● Update/Edit/Write)
-	local op, filepath = parse_operation_line(clean_line)
-	if op and filepath then
-		local resolved_path = resolve_filepath(filepath, instance.cwd)
-		if vim.fn.filereadable(resolved_path) ~= 1 then
-			vim.notify("File not found: " .. resolved_path, vim.log.levels.ERROR)
-			return false
-		end
-
-		-- Jump to file at line 1, column 0
-		local target_buf = vim.fn.bufadd(resolved_path)
-		vim.fn.bufload(target_buf)
-		vim.api.nvim_set_current_buf(target_buf)
-		vim.api.nvim_win_set_cursor(0, { 1, 0 })
-		vim.cmd("normal! zz")
-
-		vim.notify(string.format("Jumped to %s:1", vim.fn.fnamemodify(resolved_path, ":t")), vim.log.levels.INFO)
-		return true
-	end
-
-	-- Check if cursor is on a diff line
-	local diff_info = parse_diff_line_full(clean_line)
+	-- 3. Parse as diff line
+	local diff_info = parse_diff_line_full(ctx.clean_line)
 	if not diff_info then
 		vim.notify("Cursor not on a diff line", vim.log.levels.WARN)
 		return false
 	end
 
-	-- Search backwards for the edit header to get the file path
-	local header_filepath = find_edit_header_backwards(current_buf, cursor_line, instance.cwd)
-	if not header_filepath then
-		vim.notify("Could not find edit header (● Update/Edit/Write)", vim.log.levels.WARN)
+	-- 4. Find target file by searching backwards for edit header
+	local filepath = find_target_file(ctx.buf, ctx.cursor_line, ctx.instance)
+	if not filepath then
 		return false
 	end
 
-	-- Verify file exists
-	if vim.fn.filereadable(header_filepath) ~= 1 then
-		vim.notify("File not found: " .. header_filepath, vim.log.levels.ERROR)
+	-- 5. Verify file exists and open buffer
+	if vim.fn.filereadable(filepath) ~= 1 then
+		vim.notify("File not found: " .. filepath, vim.log.levels.ERROR)
 		return false
 	end
-
-	-- Open file (needed for both deleted and normal lines)
-	local target_buf = vim.fn.bufadd(header_filepath)
+	local target_buf = vim.fn.bufadd(filepath)
 	vim.fn.bufload(target_buf)
 	vim.api.nvim_set_current_buf(target_buf)
 
-	-- Handle deleted lines: content no longer exists in the file
+	-- 6. Handle deleted lines specially
 	if diff_info.indicator == "-" then
-		-- Jump to the original line number (clamped to file bounds)
-		local file_lines = vim.api.nvim_buf_line_count(target_buf)
-		local target_line = math.min(diff_info.line_num, file_lines)
-
-		vim.api.nvim_win_set_cursor(0, { target_line, 0 })
-		vim.cmd("normal! zz")
-
-		vim.notify(
-			string.format("Line was deleted - jumped to %s:%d", vim.fn.fnamemodify(header_filepath, ":t"), target_line),
-			vim.log.levels.INFO
-		)
-		return true
+		return handle_deleted_line_jump(target_buf, filepath, diff_info)
 	end
 
-	-- Calculate source column by subtracting prefix length
-	local source_col = math.max(0, cursor_col - diff_info.prefix_len)
-
-	-- Clamp line number to file length
+	-- 7. Calculate source column and search for content
+	-- Subtract diff prefix (leading ws + line number + middle ws + indicator)
+	local source_col = math.max(0, ctx.cursor_col - diff_info.prefix_len)
 	local file_lines = vim.api.nvim_buf_line_count(target_buf)
 	local target_line = math.min(diff_info.line_num, file_lines)
+	local expected_content = ctx.clean_line:sub(diff_info.prefix_len + 1)
 
-	-- Extract the expected content from the diff line (after the prefix)
-	local expected_content = clean_line:sub(diff_info.prefix_len + 1)
+	local adjusted_line, content_mismatch = search_content_nearby(
+		target_buf, expected_content, target_line, file_lines
+	)
 
-	-- Get actual content at target line
-	local target_line_content = vim.api.nvim_buf_get_lines(target_buf, target_line - 1, target_line, false)[1] or ""
+	-- 8. Notify about content shift if applicable
+	notify_content_shift(target_line, adjusted_line, content_mismatch)
 
-	-- Content matching: if the line doesn't match, search nearby
-	-- This handles multi-edit scenarios where line numbers shift
-	-- Uses normalized comparison to handle whitespace differences
-	local original_target = target_line
-	local content_mismatch = false
-	local expected_normalized = normalize_for_match(expected_content)
-
-	if normalize_for_match(target_line_content) ~= expected_normalized and expected_content:match("%S") then
-		content_mismatch = true
-		local start_search = math.max(1, target_line - CONTENT_MATCH_RANGE)
-		local end_search = math.min(file_lines, target_line + CONTENT_MATCH_RANGE)
-		local nearby_lines = vim.api.nvim_buf_get_lines(target_buf, start_search - 1, end_search, false)
-
-		for i, line in ipairs(nearby_lines) do
-			if normalize_for_match(line) == expected_normalized then
-				target_line = start_search + i - 1
-				target_line_content = line
-				break
-			end
-		end
-	end
-
-	-- Notify user if file state differs from edit (line numbers shifted)
-	if content_mismatch then
-		local offset = target_line - original_target
-		if offset ~= 0 then
-			vim.notify(
-				string.format("File changed since edit: adjusted %+d lines", offset),
-				vim.log.levels.INFO
-			)
-		else
-			vim.notify(
-				"File changed since edit: content not found nearby",
-				vim.log.levels.WARN
-			)
-		end
-	end
-
-	-- Clamp column to line length
-	-- Note: cursor positions in Neovim are byte offsets, and #string gives byte length,
-	-- so byte-based clamping is correct for nvim_win_set_cursor
-	local target_col = math.min(source_col, math.max(0, #target_line_content - 1))
-
-	-- Handle empty lines
-	if #target_line_content == 0 then
-		target_col = 0
-	end
-
-	vim.api.nvim_win_set_cursor(0, { target_line, target_col })
+	-- 9. Get line content and calculate final cursor position
+	local line_content = vim.api.nvim_buf_get_lines(target_buf, adjusted_line - 1, adjusted_line, false)[1] or ""
+	local final_line, final_col = calculate_cursor_position(adjusted_line, source_col, line_content)
+	vim.api.nvim_win_set_cursor(0, { final_line, final_col })
 	vim.cmd("normal! zz")
 
 	vim.notify(
-		string.format("Jumped to %s:%d:%d", vim.fn.fnamemodify(header_filepath, ":t"), target_line, target_col + 1),
+		string.format("Jumped to %s:%d:%d", vim.fn.fnamemodify(filepath, ":t"), final_line, final_col + 1),
 		vim.log.levels.INFO
 	)
-
 	return true
 end
 
