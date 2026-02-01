@@ -205,7 +205,7 @@ function M.spawn(spawn_type, opts)
 end
 
 --- Focus an existing Claude terminal
---- Switches to buffer, enters terminal mode
+--- Switches to the window/buffer containing the terminal
 --- @param instance table Instance to focus {buf, job_id, ...}
 function M.focus(instance)
 	if not instance or not instance.buf then
@@ -237,8 +237,6 @@ function M.focus(instance)
 		-- Buffer not visible, switch current window to it
 		vim.api.nvim_set_current_buf(instance.buf)
 	end
-
-	vim.cmd("startinsert")
 end
 
 --- Kill a Claude terminal
