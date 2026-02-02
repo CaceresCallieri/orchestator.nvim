@@ -29,6 +29,9 @@ local PROMPT_SEARCH_LIMIT = 5000 -- Max lines to search backwards for user promp
 -- User prompts in Claude Code start with ❯ (U+276F)
 local USER_PROMPT_PATTERN = "^%s*❯%s+"
 
+-- Plan headers in Claude Code start with "Ready to code?"
+local PLAN_HEADER_PATTERN = "Ready to code?"
+
 --- Set the instances module reference (called from init.lua to break circular dep)
 --- @param inst table The instances module
 function M.set_instances(inst)
@@ -312,6 +315,42 @@ local function find_prompt_backwards(buf, start_line, count)
 	end
 
 	-- Return oldest prompt found if we didn't find enough
+	return last_found_line
+end
+
+--- Check if a line is a plan header (after ANSI stripping)
+--- @param raw_line string Raw line from terminal buffer
+--- @return boolean is_plan True if line is a plan header
+local function is_plan_header_line(raw_line)
+	return strip_ansi(raw_line):find(PLAN_HEADER_PATTERN, 1, true) ~= nil
+end
+
+--- Search backwards from current line to find Nth previous plan header
+--- @param buf number Buffer ID
+--- @param start_line number Line to start searching from (0-indexed)
+--- @param count number How many plans to find (default: 1)
+--- @return number|nil line_num The 0-indexed line number of the plan header, or nil
+local function find_plan_backwards(buf, start_line, count)
+	count = count or 1
+	local found = 0
+	local last_found_line = nil
+
+	-- Limit search (plans are less frequent than prompts, same limit is fine)
+	local search_start = math.max(0, start_line - PROMPT_SEARCH_LIMIT)
+	local lines = vim.api.nvim_buf_get_lines(buf, search_start, start_line + 1, false)
+
+	-- Search from end (current line) backwards
+	for i = #lines, 1, -1 do
+		if is_plan_header_line(lines[i]) then
+			found = found + 1
+			if found >= count then
+				return search_start + i - 1 -- Convert to 0-indexed buffer line
+			end
+			last_found_line = search_start + i - 1
+		end
+	end
+
+	-- Return oldest plan found if we didn't find enough
 	return last_found_line
 end
 
@@ -957,6 +996,49 @@ function M.jump_to_last_prompt(count)
 	end
 
 	vim.api.nvim_win_set_cursor(0, { prompt_line + 1, 0 })
+	vim.cmd("normal! zz")
+
+	return true
+end
+
+--- Jump to the last plan header (or Nth previous)
+--- Works only in Claude terminal buffers in NORMAL mode
+--- Context-aware: if cursor is on a plan header, jumps to the PREVIOUS plan
+--- This allows repeated presses to navigate through plan history
+--- @param count number|nil How many plans to go back (default: 1, returns oldest if count exceeds available)
+--- @return boolean success True if jump was successful
+function M.jump_to_last_plan(count)
+	local ctx = validate_jump_context()
+	if not ctx then
+		return false
+	end
+
+	count = count or 1
+	local search_from = ctx.cursor_line
+
+	-- Context-aware: if already on a plan header, search from previous line
+	if ctx.clean_line:find(PLAN_HEADER_PATTERN, 1, true) then
+		if ctx.cursor_line == 0 then
+			vim.notify("Already at the first plan", vim.log.levels.INFO)
+			return false
+		end
+		search_from = ctx.cursor_line - 1
+	end
+
+	local plan_line = find_plan_backwards(ctx.buf, search_from, count)
+
+	if not plan_line then
+		vim.notify("No plans found", vim.log.levels.INFO)
+		return false
+	end
+
+	-- Check if we'd jump to the same line (already at oldest plan)
+	if plan_line == ctx.cursor_line then
+		vim.notify("Already at the first plan", vim.log.levels.INFO)
+		return false
+	end
+
+	vim.api.nvim_win_set_cursor(0, { plan_line + 1, 0 })
 	vim.cmd("normal! zz")
 
 	return true

@@ -17,6 +17,10 @@ local jump_to_diff_fn = nil
 ---@type function|nil
 local jump_to_prompt_fn = nil
 
+-- Forward declaration for jump_to_plan function (set via setter from init.lua)
+---@type function|nil
+local jump_to_plan_fn = nil
+
 -- Plugin configuration (set via setter from init.lua)
 ---@type table
 local terminal_config = {}
@@ -48,6 +52,12 @@ end
 --- @param fn function The jump_to_last_prompt function from edit_tracker
 function M.set_jump_to_prompt_fn(fn)
 	jump_to_prompt_fn = fn
+end
+
+--- Set the jump_to_plan function (called from init.lua to break circular dep)
+--- @param fn function The jump_to_last_plan function from edit_tracker
+function M.set_jump_to_plan_fn(fn)
+	jump_to_plan_fn = fn
 end
 
 --- Set up buffer-local keybindings for Claude terminal
@@ -94,6 +104,18 @@ local function setup_terminal_keybindings(buf, kill_fn)
 			noremap = true,
 			silent = true,
 			desc = "Jump to last user prompt",
+		})
+	end
+
+	-- Jump to last plan (normal mode only)
+	if km.jump_to_plan and km.jump_to_plan ~= false and jump_to_plan_fn then
+		vim.keymap.set("n", km.jump_to_plan, function()
+			jump_to_plan_fn()
+		end, {
+			buffer = buf,
+			noremap = true,
+			silent = true,
+			desc = "Jump to last plan",
 		})
 	end
 end

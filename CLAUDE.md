@@ -154,6 +154,30 @@ if job_status ~= -1 then -- -1 means still running
 
 Use `vim.schedule()` in async contexts (TermClose, on_exit) to ensure Neovim state is consistent.
 
+## Edit Tracker & Terminal Navigation
+
+The `edit_tracker.lua` module provides navigation features for Claude terminal buffers:
+
+### Jump to Diff (`gd`)
+- Parses diff output and jumps to the corresponding source file location
+- Context-aware column positioning based on cursor position in diff
+- Handles deleted lines, content shifts, and file changes gracefully
+
+### Jump to Prompt (`gp`)
+- Pattern: `USER_PROMPT_PATTERN = "^%s*❯%s+"` (matches the ❯ prompt character)
+- Context-aware: if cursor is on a prompt, jumps to PREVIOUS prompt
+- Edge cases handled: line 0 boundary, same-line return at oldest prompt
+
+### Jump to Plan (`gP`)
+- Pattern: `PLAN_HEADER_PATTERN = "Ready to code?"` (Claude's plan presentation header)
+- Same context-aware behavior as jump-to-prompt
+- Useful for reviewing Claude's implementation plans
+
+### Pattern Verification
+To verify patterns match actual Claude output, spawn a Claude instance and:
+- For prompts: type a command and look for the ❯ character
+- For plans: give a complex request that triggers planning mode
+
 ## Testing Considerations
 
 - `teardown()` cleans all state for test isolation

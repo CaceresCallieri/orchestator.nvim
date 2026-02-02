@@ -30,6 +30,7 @@ local default_config = {
 			close = "<C-S-q>", -- Close current Claude instance
 			jump_to_diff = "gd", -- Jump to source file from diff line
 			jump_to_prompt = "gp", -- Jump to last user prompt
+			jump_to_plan = "gP", -- Jump to last plan
 		},
 	},
 	-- Dangerous mode configuration (--dangerously-skip-permissions)
@@ -311,6 +312,14 @@ function M.jump_to_last_prompt(count)
 	return edit_tracker.jump_to_last_prompt(count)
 end
 
+--- Jump to the last plan header (or Nth previous)
+--- Only works when cursor is in a Claude terminal buffer
+--- @param count number|nil How many plans to go back (default: 1)
+--- @return boolean success True if jump was successful
+function M.jump_to_last_plan(count)
+	return edit_tracker.jump_to_last_plan(count)
+end
+
 -- ============================================================
 -- CORE: Send to Terminal
 -- ============================================================
@@ -589,6 +598,21 @@ local function setup_user_commands()
 		nargs = "?",
 	})
 
+	vim.api.nvim_create_user_command("AgentsPlanJump", function(opts)
+		local count = 1
+		if opts.args ~= "" then
+			count = tonumber(opts.args)
+			if not count then
+				vim.notify("Count must be a number", vim.log.levels.ERROR)
+				return
+			end
+		end
+		M.jump_to_last_plan(count)
+	end, {
+		desc = "Jump to last plan (or Nth previous)",
+		nargs = "?",
+	})
+
 	vim.api.nvim_create_user_command("OrchestratorDebug", function()
 		local all = instances.get_all()
 		local project = instances.get_for_current_project()
@@ -678,6 +702,9 @@ local function setup_plug_mappings()
 	vim.keymap.set("n", "<Plug>(OrchestratorJumpToPrompt)", M.jump_to_last_prompt, {
 		desc = "Jump to last user prompt in terminal",
 	})
+	vim.keymap.set("n", "<Plug>(OrchestratorJumpToPlan)", M.jump_to_last_plan, {
+		desc = "Jump to last plan in terminal",
+	})
 end
 
 -- ============================================================
@@ -757,6 +784,7 @@ function M.setup(opts)
 	terminal.set_config(config)
 	terminal.set_jump_to_diff_fn(edit_tracker.jump_to_diff_location)
 	terminal.set_jump_to_prompt_fn(edit_tracker.jump_to_last_prompt)
+	terminal.set_jump_to_plan_fn(edit_tracker.jump_to_last_plan)
 	picker.set_terminal(terminal)
 	editor.set_send_function(M.send_to_terminal)
 	editor.set_config(config)
@@ -793,6 +821,7 @@ local user_commands = {
 	"AgentsEditsClose",
 	"AgentsDiffJump",
 	"AgentsPromptJump",
+	"AgentsPlanJump",
 	"OrchestratorDebug",
 	"OrchestratorReload",
 }
