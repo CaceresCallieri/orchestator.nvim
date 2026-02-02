@@ -13,6 +13,10 @@ local instances = nil
 ---@type function|nil
 local jump_to_diff_fn = nil
 
+-- Forward declaration for jump_to_prompt function (set via setter from init.lua)
+---@type function|nil
+local jump_to_prompt_fn = nil
+
 -- Plugin configuration (set via setter from init.lua)
 ---@type table
 local terminal_config = {}
@@ -38,6 +42,12 @@ end
 --- @param fn function The jump_to_diff_location function from edit_tracker
 function M.set_jump_to_diff_fn(fn)
 	jump_to_diff_fn = fn
+end
+
+--- Set the jump_to_prompt function (called from init.lua to break circular dep)
+--- @param fn function The jump_to_last_prompt function from edit_tracker
+function M.set_jump_to_prompt_fn(fn)
+	jump_to_prompt_fn = fn
 end
 
 --- Set up buffer-local keybindings for Claude terminal
@@ -72,6 +82,18 @@ local function setup_terminal_keybindings(buf, kill_fn)
 			noremap = true,
 			silent = true,
 			desc = "Jump to source from diff line",
+		})
+	end
+
+	-- Jump to last user prompt (normal mode only)
+	if km.jump_to_prompt and km.jump_to_prompt ~= false and jump_to_prompt_fn then
+		vim.keymap.set("n", km.jump_to_prompt, function()
+			jump_to_prompt_fn()
+		end, {
+			buffer = buf,
+			noremap = true,
+			silent = true,
+			desc = "Jump to last user prompt",
 		})
 	end
 end

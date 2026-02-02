@@ -24,6 +24,10 @@ local float_config = {
 -- Search limits (extracted as constants for readability)
 local HEADER_SEARCH_LIMIT = 1000 -- Max lines to search backwards for edit header
 local CONTENT_MATCH_RANGE = 20 -- Search ±N lines for content match fallback
+local PROMPT_SEARCH_LIMIT = 5000 -- Max lines to search backwards for user prompts
+
+-- User prompts in Claude Code start with ❯ (U+276F)
+local USER_PROMPT_PATTERN = "^%s*❯%s+"
 
 --- Set the instances module reference (called from init.lua to break circular dep)
 --- @param inst table The instances module
@@ -272,6 +276,43 @@ end
 --- @return string Normalized string
 local function normalize_for_match(str)
 	return str:gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+--- Check if a line is a user prompt (after ANSI stripping)
+--- User prompts in Claude Code start with ❯ (U+276F)
+--- @param raw_line string Raw line from terminal buffer
+--- @return boolean is_prompt True if line is a user prompt
+local function is_user_prompt_line(raw_line)
+	return strip_ansi(raw_line):match(USER_PROMPT_PATTERN) ~= nil
+end
+
+--- Search backwards from current line to find Nth previous user prompt
+--- @param buf number Buffer ID
+--- @param start_line number Line to start searching from (0-indexed)
+--- @param count number How many prompts to find (default: 1)
+--- @return number|nil line_num The 0-indexed line number of the prompt, or nil
+local function find_prompt_backwards(buf, start_line, count)
+	count = count or 1
+	local found = 0
+	local last_found_line = nil
+
+	-- Limit search to prevent scanning entire huge terminal buffer
+	local search_start = math.max(0, start_line - PROMPT_SEARCH_LIMIT)
+	local lines = vim.api.nvim_buf_get_lines(buf, search_start, start_line + 1, false)
+
+	-- Search from end (current line) backwards
+	for i = #lines, 1, -1 do
+		if is_user_prompt_line(lines[i]) then
+			found = found + 1
+			if found >= count then
+				return search_start + i - 1 -- Convert to 0-indexed buffer line
+			end
+			last_found_line = search_start + i - 1
+		end
+	end
+
+	-- Return oldest prompt found if we didn't find enough
+	return last_found_line
 end
 
 --- Parse a single line for operation start (Update/Edit/Write)
@@ -875,6 +916,49 @@ function M.jump_to_diff_location()
 		string.format("Jumped to %s:%d:%d", vim.fn.fnamemodify(filepath, ":t"), final_line, final_col + 1),
 		vim.log.levels.INFO
 	)
+	return true
+end
+
+--- Jump to the last user prompt (or Nth previous)
+--- Works only in Claude terminal buffers in NORMAL mode
+--- Context-aware: if cursor is on a prompt line, jumps to the PREVIOUS prompt
+--- This allows repeated presses to navigate through prompt history
+--- @param count number|nil How many prompts to go back (default: 1, returns oldest if count exceeds available)
+--- @return boolean success True if jump was successful
+function M.jump_to_last_prompt(count)
+	local ctx = validate_jump_context()
+	if not ctx then
+		return false
+	end
+
+	count = count or 1
+	local search_from = ctx.cursor_line
+
+	-- Context-aware: if already on a prompt, search from previous line
+	if ctx.clean_line:match(USER_PROMPT_PATTERN) then
+		if ctx.cursor_line == 0 then
+			vim.notify("Already at the first prompt", vim.log.levels.INFO)
+			return false
+		end
+		search_from = ctx.cursor_line - 1
+	end
+
+	local prompt_line = find_prompt_backwards(ctx.buf, search_from, count)
+
+	if not prompt_line then
+		vim.notify("No more prompts found", vim.log.levels.INFO)
+		return false
+	end
+
+	-- Check if we'd jump to the same line (already at oldest prompt)
+	if prompt_line == ctx.cursor_line then
+		vim.notify("Already at the first prompt", vim.log.levels.INFO)
+		return false
+	end
+
+	vim.api.nvim_win_set_cursor(0, { prompt_line + 1, 0 })
+	vim.cmd("normal! zz")
+
 	return true
 end
 
