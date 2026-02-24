@@ -62,6 +62,11 @@ local augroup = vim.api.nvim_create_augroup("Orchestrator", { clear = true })
 local title_update_timer = nil
 local TITLE_DEBOUNCE_MS = 50
 
+-- Whether this Neovim's terminal window currently has focus.
+-- Toggled by FocusGained/FocusLost autocmds (terminal sends focus escape sequences).
+-- Used by STT socket selection: only the focused Neovim gets injected into.
+local has_terminal_focus = false
+
 -- ============================================================
 -- PUBLIC API: Editor Functions
 -- ============================================================
@@ -321,6 +326,124 @@ function M.jump_to_last_plan(count)
 end
 
 -- ============================================================
+-- PUBLIC API: STT Targeting & Injection (External RPC)
+-- ============================================================
+
+--- Get targeting info for STT socket selection.
+--- Lightweight query — no side effects, no file I/O.
+--- Called via: nvim --server <sock> --remote-expr 'luaeval("require(\"orchestrator\").stt_target_info()")'
+--- @return string JSON: {"has_instances": bool, "has_focus": bool, "last_active_buf": number}
+function M.stt_target_info()
+	local active_buf = state.state.last_active_buf
+	local buf_num = -1
+	if active_buf ~= nil and vim.api.nvim_buf_is_valid(active_buf) then
+		buf_num = active_buf
+	end
+	return vim.json.encode({
+		has_instances = #state.state.claude_instances > 0,
+		has_focus = has_terminal_focus,
+		last_active_buf = buf_num,
+	})
+end
+
+--- Inject text from STT into the last active Claude instance.
+--- Designed for external RPC callers (no UI, returns JSON).
+--- Called via: nvim --server <sock> --remote-expr 'luaeval("require(\"orchestrator\").stt_inject(_A[1], _A[2], _A[3])", [filepath, submit, target_buf])'
+--- @param filepath string Path to temp file containing the transcription text
+--- @param submit boolean If true, append newline (Enter) after text
+--- @param target_buf number|nil Specific buffer to target (-1 or nil = use internal heuristic)
+--- @return string JSON result: {"ok": bool, "error"?: string, "instance_cwd"?: string}
+function M.stt_inject(filepath, submit, target_buf)
+	-- Read text from temp file
+	local file = io.open(filepath, "r")
+	if not file then
+		return vim.json.encode({ ok = false, error = "file_read_failed" })
+	end
+	local text = file:read("*a")
+	file:close()
+
+	if not text or text == "" then
+		return vim.json.encode({ ok = false, error = "empty_text" })
+	end
+
+	-- Find best Claude instance
+	local all_instances = state.state.claude_instances
+	if #all_instances == 0 then
+		return vim.json.encode({ ok = false, error = "no_instances" })
+	end
+
+	local target = nil
+
+	-- Priority 0: explicit target_buf from stop-time capture
+	if target_buf and target_buf > 0 then
+		if vim.api.nvim_buf_is_valid(target_buf) then
+			for _, inst in ipairs(all_instances) do
+				if inst.buf == target_buf then
+					target = inst
+					break
+				end
+			end
+		end
+		-- target_buf invalid or not a Claude instance; target stays nil for priority 1/2
+	end
+
+	-- Priority 1: last_active_buf → find matching instance
+	if not target and state.state.last_active_buf then
+		for _, inst in ipairs(all_instances) do
+			if inst.buf == state.state.last_active_buf then
+				target = inst
+				break
+			end
+		end
+	end
+
+	-- Priority 2: most recently spawned instance
+	if not target then
+		local latest = nil
+		for _, inst in ipairs(all_instances) do
+			if not latest or inst.spawned_at > latest.spawned_at then
+				latest = inst
+			end
+		end
+		target = latest
+	end
+
+	if not target then
+		return vim.json.encode({ ok = false, error = "no_instances" })
+	end
+
+	-- Verify job is still running (jobwait returns -1 for running jobs)
+	local job_status = vim.fn.jobwait({ target.job_id }, 0)[1]
+	if job_status ~= -1 then
+		return vim.json.encode({ ok = false, error = "job_exited" })
+	end
+
+	-- Send text to terminal (without Enter — sent separately below)
+	local ok, err = pcall(vim.api.nvim_chan_send, target.job_id, text)
+	if not ok then
+		return vim.json.encode({ ok = false, error = "chan_send_failed: " .. tostring(err) })
+	end
+
+	-- Schedule Enter after delay so Ink processes text and Enter as separate events.
+	-- When text+Enter arrive in one PTY write, Ink batches them as a "paste" and
+	-- inserts the newline literally. A 100ms gap ensures separate read() calls.
+	-- Must use \r (CR, 0x0D) — this is what physical Enter produces in raw mode.
+	-- Node.js readline maps \r to key.name='return'; Ink checks key.return for submit.
+	-- \n (LF, 0x0A) does NOT trigger submit — it's just a line feed character.
+	if submit then
+		local job_id = target.job_id
+		vim.defer_fn(function()
+			pcall(vim.api.nvim_chan_send, job_id, "\r")
+		end, 100)
+	end
+
+	-- Clean up temp file (best-effort)
+	os.remove(filepath)
+
+	return vim.json.encode({ ok = true, instance_cwd = target.cwd })
+end
+
+-- ============================================================
 -- CORE: Send to Terminal
 -- ============================================================
 
@@ -450,6 +573,25 @@ local function setup_terminal_autocmds()
 			-- Update all winbars to reflect correct active state
 			-- (must update all windows so previously active one dims)
 			status_bar.update()
+		end,
+	})
+
+	-- Track terminal focus state for STT socket selection.
+	-- Ghostty sends focus-in/focus-out escape sequences; Neovim translates these
+	-- to FocusGained/FocusLost autocmds. At stop-time, only the Neovim in the
+	-- active terminal window has has_terminal_focus=true, giving deterministic
+	-- socket selection even with multiple Neovim instances.
+	vim.api.nvim_create_autocmd("FocusGained", {
+		group = augroup,
+		callback = function()
+			has_terminal_focus = true
+		end,
+	})
+
+	vim.api.nvim_create_autocmd("FocusLost", {
+		group = augroup,
+		callback = function()
+			has_terminal_focus = false
 		end,
 	})
 end
@@ -878,6 +1020,7 @@ function M.reload()
 	local saved_color_idx = state.state.next_color_idx
 	local saved_last_active = state.state.last_active_buf
 	local saved_status_bar_visible = state.state.status_bar.visible
+	local saved_focus = has_terminal_focus
 
 	-- 2. Close UI windows (but NOT terminal buffers)
 	cleanup_ui()
@@ -920,12 +1063,19 @@ function M.reload()
 	new_state.state.last_active_buf = saved_last_active
 	new_state.state.status_bar.visible = saved_status_bar_visible
 
-	-- 8. Refresh status bar if instances exist and was visible
+	-- 8. Restore terminal focus state (has_terminal_focus is module-local,
+	-- so clearing module cache resets it). Fire synthetic FocusGained so
+	-- the new module's autocmd handler sets the variable correctly.
+	if saved_focus then
+		vim.api.nvim_exec_autocmds("FocusGained", { group = "Orchestrator" })
+	end
+
+	-- 9. Refresh status bar if instances exist and was visible
 	if #saved_instances > 0 and saved_status_bar_visible then
 		require("orchestrator.status_bar").show()
 	end
 
-	-- 9. Reapply terminal buffer keymaps to existing instances
+	-- 10. Reapply terminal buffer keymaps to existing instances
 	if #saved_instances > 0 then
 		require("orchestrator.terminal").reapply_keybindings_to_existing(
 			saved_instances,
