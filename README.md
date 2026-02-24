@@ -21,7 +21,7 @@ For local development:
 
 ```lua
 {
-  dir = "~/Dev/orchestrator.nvim",
+  dir = "~/projects/orchestrator.nvim",
   name = "orchestrator.nvim",
   dev = true,
   config = function()
@@ -69,7 +69,7 @@ If you're using lazy.nvim with local dev plugins, ensure your `dev.path` is conf
 ```lua
 require("lazy").setup("your.plugins", {
   dev = {
-    path = "~/Dev",  -- Where local plugins live
+    path = "~/projects",  -- Where local plugins live
     patterns = {},   -- Or specify specific patterns
     fallback = false,
   },
