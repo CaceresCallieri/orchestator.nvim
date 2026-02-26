@@ -54,6 +54,7 @@ local editor = require("orchestrator.editor")
 local terminal = require("orchestrator.terminal")
 local spawn_menu = require("orchestrator.spawn_menu")
 local edit_tracker = require("orchestrator.edit_tracker")
+local bridge = require("orchestrator.bridge")
 
 -- Create autocmd group
 local augroup = vim.api.nvim_create_augroup("Orchestrator", { clear = true })
@@ -336,13 +337,38 @@ end
 function M.stt_target_info()
 	local active_buf = state.state.last_active_buf
 	local buf_num = -1
+	local title = ""
+	local cwd = ""
+
+	-- Resolve target buffer: last_active_buf, then single-instance fallback
+	-- (mirrors the priority chain in stt_inject)
+	local target_buf = nil
 	if active_buf ~= nil and vim.api.nvim_buf_is_valid(active_buf) then
-		buf_num = active_buf
+		target_buf = active_buf
+	elseif #state.state.claude_instances == 1 then
+		-- Single instance: unambiguous target even without BufEnter tracking
+		target_buf = state.state.claude_instances[1].buf
 	end
+
+	if target_buf and vim.api.nvim_buf_is_valid(target_buf) then
+		buf_num = target_buf
+		-- Get title from term_title (same source as winbar, filters shell names)
+		title = status_bar.get_instance_title(target_buf) or ""
+		-- Find instance for this buffer to get project cwd
+		for _, inst in ipairs(state.state.claude_instances) do
+			if inst.buf == target_buf then
+				cwd = inst.cwd or ""
+				break
+			end
+		end
+	end
+
 	return vim.json.encode({
 		has_instances = #state.state.claude_instances > 0,
 		has_focus = has_terminal_focus,
 		last_active_buf = buf_num,
+		instance_title = title,
+		instance_cwd = cwd,
 	})
 end
 
@@ -548,6 +574,7 @@ local function setup_terminal_autocmds()
 			title_update_timer = vim.fn.timer_start(TITLE_DEBOUNCE_MS, function()
 				vim.schedule(function()
 					status_bar.update()
+					bridge.notify_title(args.buf)
 					title_update_timer = nil
 				end)
 			end)
@@ -568,6 +595,7 @@ local function setup_terminal_autocmds()
 			local current_is_claude = instances.get_by_buf(current_buf) ~= nil
 			if current_is_claude then
 				state.state.last_active_buf = current_buf
+				bridge.notify_focus(current_buf)
 			end
 
 			-- Update all winbars to reflect correct active state
@@ -922,6 +950,7 @@ function M.setup(opts)
 
 	-- Wire up module dependencies (break circular references)
 	instances.set_status_bar(status_bar)
+	instances.set_bridge(bridge)
 	terminal.set_instances(instances)
 	terminal.set_config(config)
 	terminal.set_jump_to_diff_fn(edit_tracker.jump_to_diff_location)
@@ -938,6 +967,9 @@ function M.setup(opts)
 	setup_plug_mappings()
 	setup_terminal_autocmds()
 	setup_user_commands()
+
+	-- Connect to Symmetria shell bridge (non-blocking, silently retries)
+	bridge.setup()
 end
 
 -- ============================================================
@@ -1022,13 +1054,16 @@ function M.reload()
 	local saved_status_bar_visible = state.state.status_bar.visible
 	local saved_focus = has_terminal_focus
 
-	-- 2. Close UI windows (but NOT terminal buffers)
+	-- 2. Disconnect bridge before module cache is cleared
+	bridge.disconnect()
+
+	-- 3. Close UI windows (but NOT terminal buffers)
 	cleanup_ui()
 
-	-- 3. Delete autocmds and commands
+	-- 4. Delete autocmds and commands
 	cleanup_commands()
 
-	-- 4. Clear Lua module cache
+	-- 5. Clear Lua module cache
 	local modules = {
 		"orchestrator",
 		"orchestrator.state",
@@ -1040,15 +1075,16 @@ function M.reload()
 		"orchestrator.terminal",
 		"orchestrator.spawn_menu",
 		"orchestrator.edit_tracker",
+		"orchestrator.bridge",
 	}
 	for _, mod in ipairs(modules) do
 		package.loaded[mod] = nil
 	end
 
-	-- 5. Reset plugin guard
+	-- 6. Reset plugin guard
 	vim.g.loaded_orchestrator = 0
 
-	-- 6. Re-require and setup
+	-- 7. Re-require and setup
 	local ok, orchestrator = pcall(require, "orchestrator")
 	if not ok then
 		vim.notify("Orchestrator reload failed: " .. tostring(orchestrator), vim.log.levels.ERROR)
@@ -1056,26 +1092,26 @@ function M.reload()
 	end
 	orchestrator.setup()
 
-	-- 7. Restore instance state
+	-- 8. Restore instance state
 	local new_state = require("orchestrator.state")
 	new_state.state.claude_instances = saved_instances
 	new_state.state.next_color_idx = saved_color_idx
 	new_state.state.last_active_buf = saved_last_active
 	new_state.state.status_bar.visible = saved_status_bar_visible
 
-	-- 8. Restore terminal focus state (has_terminal_focus is module-local,
+	-- 9. Restore terminal focus state (has_terminal_focus is module-local,
 	-- so clearing module cache resets it). Fire synthetic FocusGained so
 	-- the new module's autocmd handler sets the variable correctly.
 	if saved_focus then
 		vim.api.nvim_exec_autocmds("FocusGained", { group = "Orchestrator" })
 	end
 
-	-- 9. Refresh status bar if instances exist and was visible
+	-- 10. Refresh status bar if instances exist and was visible
 	if #saved_instances > 0 and saved_status_bar_visible then
 		require("orchestrator.status_bar").show()
 	end
 
-	-- 10. Reapply terminal buffer keymaps to existing instances
+	-- 11. Reapply terminal buffer keymaps to existing instances
 	if #saved_instances > 0 then
 		require("orchestrator.terminal").reapply_keybindings_to_existing(
 			saved_instances,
@@ -1092,6 +1128,7 @@ end
 
 --- Teardown function for testing and cleanup
 function M.teardown()
+	bridge.disconnect()
 	cleanup_ui()
 	state.reset()
 	cleanup_commands()

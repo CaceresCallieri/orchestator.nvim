@@ -11,10 +11,20 @@ local M = {}
 ---@type table|nil
 local status_bar = nil
 
+-- Forward declaration for bridge (to avoid circular dependency)
+---@type table|nil
+local bridge_module = nil
+
 --- Set the status_bar module reference (called from init.lua to break circular dep)
 --- @param sb table The status_bar module
 function M.set_status_bar(sb)
 	status_bar = sb
+end
+
+--- Set the bridge module reference (called from init.lua to break circular dep)
+--- @param b table The bridge module
+function M.set_bridge(b)
+	bridge_module = b
 end
 
 --- Build a lookup table mapping buffer IDs to window IDs
@@ -78,6 +88,10 @@ function M.register_spawned(buf, job_id, cwd, spawn_type, dangerous)
 		status_bar.update()
 	end
 
+	if bridge_module then
+		bridge_module.notify_spawn(instance)
+	end
+
 	return instance
 end
 
@@ -100,6 +114,10 @@ function M.unregister(buf)
 				else
 					status_bar.update()
 				end
+			end
+
+			if bridge_module then
+				bridge_module.notify_remove(buf)
 			end
 
 			return true
