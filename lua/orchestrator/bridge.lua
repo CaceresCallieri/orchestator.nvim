@@ -12,10 +12,9 @@ local M = {}
 local uv = vim.loop or vim.uv
 
 -- Socket path: /run/user/$UID/symmetria-agents.sock
-local SOCKET_PATH = string.format("/run/user/%d/symmetria-agents.sock", uv.getuid())
-
--- Reconnection interval (ms)
-local RECONNECT_INTERVAL = 5000
+local SOCKET_DIR = string.format("/run/user/%d", uv.getuid())
+local SOCKET_NAME = "symmetria-agents.sock"
+local SOCKET_PATH = SOCKET_DIR .. "/" .. SOCKET_NAME
 
 -- Debug logging (set to true to enable diagnostic output in :messages)
 local DEBUG = false
@@ -43,8 +42,8 @@ local TITLE_DEBOUNCE_MS = 200
 ---@type userdata|nil libuv pipe handle
 local pipe = nil
 
----@type userdata|nil Reconnection timer
-local reconnect_timer = nil
+---@type userdata|nil Filesystem watcher for socket directory (inotify-backed)
+local socket_watcher = nil
 
 ---@type userdata|nil Title debounce timer
 local title_debounce_timer = nil
@@ -61,24 +60,67 @@ local nvim_pid = nil
 ---@type number
 local connection_gen = 0
 
--- Forward declaration (start_reconnect is defined after send but referenced by it)
-local start_reconnect
-
 -- ============================================================
 -- INTERNAL: Connection Lifecycle Helpers
 -- ============================================================
 
---- Close the current pipe and start reconnection.
+--- Start watching the socket directory for the bridge socket to appear.
+--- Uses libuv fs_event (inotify on Linux) — no polling, instant notification.
+--- Called when connect() finds no socket; stops itself once connected.
+local function start_watching()
+	if socket_watcher then
+		return -- already watching
+	end
+
+	socket_watcher = uv.new_fs_event()
+	local _, start_err = socket_watcher:start(SOCKET_DIR, {}, function(err, filename, _events)
+		if err then
+			dbg("watch: error %s", tostring(err))
+			return
+		end
+		if filename ~= SOCKET_NAME then
+			return -- not our file
+		end
+		-- Socket file appeared — try to connect on the main thread
+		vim.schedule(function()
+			if connected or pipe then
+				return -- already connected or connection in-flight
+			end
+			dbg("watch: socket appeared, calling connect()")
+			M.connect()
+		end)
+	end)
+	if start_err then
+		dbg("start_watching: FAILED: %s", tostring(start_err))
+		socket_watcher:close()
+		socket_watcher = nil
+	else
+		dbg("start_watching: watching %s for %s", SOCKET_DIR, SOCKET_NAME)
+	end
+end
+
+--- Stop watching for the socket file.
+local function stop_watching()
+	if socket_watcher then
+		if not socket_watcher:is_closing() then
+			socket_watcher:stop()
+			socket_watcher:close()
+		end
+		socket_watcher = nil
+	end
+end
+
+--- Close the current pipe and mark as disconnected.
 --- Captures `pipe` into a local before clearing, preventing stale-handle
 --- errors if a concurrent vim.schedule callback has already nilled it.
-local function close_and_reconnect()
+--- Reconnection is handled externally by bridge.py solicitation via reconnect().
+local function handle_disconnect()
 	connected = false
 	local p = pipe
 	pipe = nil
 	if p and not p:is_closing() then
 		p:close()
 	end
-	start_reconnect()
 end
 
 -- ============================================================
@@ -105,7 +147,7 @@ local function send(msg)
 	end)
 	if not write_ok then
 		dbg("send(%s) WRITE FAILED: %s — marking disconnected", msg.type or "?", tostring(write_err))
-		close_and_reconnect()
+		handle_disconnect()
 	else
 		dbg("send(%s) ok (%d bytes)", msg.type or "?", #json)
 	end
@@ -139,39 +181,6 @@ local function build_instance_data(inst)
 end
 
 -- ============================================================
--- INTERNAL: Connection Management
--- ============================================================
-
---- Start reconnection timer (checks every RECONNECT_INTERVAL ms).
-start_reconnect = function()
-	if reconnect_timer then
-		dbg("start_reconnect: timer already running, skipping")
-		return -- Already running
-	end
-
-	dbg("start_reconnect: starting %dms reconnect timer", RECONNECT_INTERVAL)
-	reconnect_timer = uv.new_timer()
-	reconnect_timer:start(RECONNECT_INTERVAL, RECONNECT_INTERVAL, function()
-		-- connect() checks socket existence itself; no duplicate fs_stat here
-		dbg("reconnect tick: calling connect()")
-		vim.schedule(function()
-			M.connect()
-		end)
-	end)
-end
-
---- Stop reconnection timer.
-local function stop_reconnect()
-	if reconnect_timer then
-		if not reconnect_timer:is_closing() then
-			reconnect_timer:stop()
-			reconnect_timer:close()
-		end
-		reconnect_timer = nil
-	end
-end
-
--- ============================================================
 -- PUBLIC API
 -- ============================================================
 
@@ -184,11 +193,11 @@ function M.connect()
 		return
 	end
 
-	-- Check if socket exists
+	-- Check if socket exists; if not, watch for it to appear (inotify)
 	local stat = uv.fs_stat(SOCKET_PATH)
 	if not stat then
-		dbg("connect(): socket not found at %s, starting reconnect", SOCKET_PATH)
-		start_reconnect()
+		dbg("connect(): socket not found at %s, watching directory", SOCKET_PATH)
+		start_watching()
 		return
 	end
 
@@ -203,7 +212,7 @@ function M.connect()
 		if err then
 			dbg("connect(): pipe:connect FAILED: %s", tostring(err))
 			if my_gen == connection_gen then
-				close_and_reconnect()
+				handle_disconnect()
 			end
 			return
 		end
@@ -225,7 +234,7 @@ function M.connect()
 					end
 					dbg("read_start: EOF/error detected — disconnecting (gen=%d)", my_gen)
 					connection_gen = connection_gen + 1
-					close_and_reconnect()
+					handle_disconnect()
 				end)
 			end
 		end)
@@ -238,7 +247,7 @@ function M.connect()
 			end
 
 			connected = true
-			stop_reconnect()
+			stop_watching()
 			dbg("connect(): CONNECTED (gen=%d) — sending hello + sync", my_gen)
 
 			-- Send hello
@@ -252,6 +261,26 @@ function M.connect()
 			M.send_sync()
 		end)
 	end)
+end
+
+--- Force reconnection to the bridge (called via RPC when bridge restarts).
+--- Unlike connect(), this tears down stale state first (connect bails if
+--- pipe/connected are set). Unlike disconnect(), this skips the goodbye
+--- message (the old bridge is dead — nobody is listening).
+function M.reconnect()
+	if not nvim_pid then
+		return "not_initialized"
+	end
+	dbg("reconnect(): tearing down stale state and reconnecting")
+	connection_gen = connection_gen + 1 -- invalidate stale callbacks
+	connected = false -- prevent send() during teardown
+	local p = pipe
+	pipe = nil -- clear before close so connect() doesn't bail
+	if p and not p:is_closing() then
+		p:close()
+	end
+	M.connect() -- connect to new socket immediately
+	return "ok"
 end
 
 --- Send full state synchronization.
@@ -338,10 +367,9 @@ end
 --- Clean disconnect (called from orchestrator.teardown).
 function M.disconnect()
 	-- Mark disconnected first to prevent racing callbacks from sending messages
-	-- or starting reconnect timers during teardown
 	local was_connected = connected
 	connected = false
-	stop_reconnect()
+	stop_watching()
 
 	-- Clean up title debounce timer
 	if title_debounce_timer then
