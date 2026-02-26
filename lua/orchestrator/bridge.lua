@@ -17,7 +17,7 @@ local SOCKET_PATH = string.format("/run/user/%d/symmetria-agents.sock", uv.getui
 -- Reconnection interval (ms)
 local RECONNECT_INTERVAL = 5000
 
--- Debug logging (set to false to silence)
+-- Debug logging (set to true to enable diagnostic output in :messages)
 local DEBUG = false
 
 --- Log a debug message to Neovim's message area and :messages history.
@@ -28,7 +28,10 @@ local function dbg(fmt, ...)
 		return
 	end
 	local pid = uv.getpid() or 0
-	local msg = string.format("[bridge:%d] " .. fmt, pid, ...)
+	-- Evaluate caller's format first, then prefix — avoids misinterpreting
+	-- stray % characters from unexpected sources in fmt arguments.
+	local body = string.format(fmt, ...)
+	local msg = string.format("[bridge:%d] %s", pid, body)
 	vim.schedule(function()
 		vim.api.nvim_echo({ { msg, "Comment" } }, true, {})
 	end)
@@ -52,8 +55,31 @@ local connected = false
 ---@type number|nil Neovim's PID (stable identifier for this session)
 local nvim_pid = nil
 
+--- Monotonically increasing connection generation. Each connect() attempt
+--- increments this; callbacks capture their generation and bail if it has
+--- advanced, preventing races between overlapping read_start/connect callbacks.
+---@type number
+local connection_gen = 0
+
 -- Forward declaration (start_reconnect is defined after send but referenced by it)
 local start_reconnect
+
+-- ============================================================
+-- INTERNAL: Connection Lifecycle Helpers
+-- ============================================================
+
+--- Close the current pipe and start reconnection.
+--- Captures `pipe` into a local before clearing, preventing stale-handle
+--- errors if a concurrent vim.schedule callback has already nilled it.
+local function close_and_reconnect()
+	connected = false
+	local p = pipe
+	pipe = nil
+	if p and not p:is_closing() then
+		p:close()
+	end
+	start_reconnect()
+end
 
 -- ============================================================
 -- INTERNAL: Socket Communication
@@ -78,14 +104,8 @@ local function send(msg)
 		pipe:write(json .. "\n")
 	end)
 	if not write_ok then
-		-- Connection likely broken, mark as disconnected
 		dbg("send(%s) WRITE FAILED: %s — marking disconnected", msg.type or "?", tostring(write_err))
-		connected = false
-		if pipe and not pipe:is_closing() then
-			pipe:close()
-		end
-		pipe = nil
-		start_reconnect()
+		close_and_reconnect()
 	else
 		dbg("send(%s) ok (%d bytes)", msg.type or "?", #json)
 	end
@@ -132,16 +152,11 @@ start_reconnect = function()
 	dbg("start_reconnect: starting %dms reconnect timer", RECONNECT_INTERVAL)
 	reconnect_timer = uv.new_timer()
 	reconnect_timer:start(RECONNECT_INTERVAL, RECONNECT_INTERVAL, function()
-		-- Check if socket file exists before attempting connection
-		local stat = uv.fs_stat(SOCKET_PATH)
-		if stat then
-			dbg("reconnect tick: socket exists, calling connect()")
-			vim.schedule(function()
-				M.connect()
-			end)
-		else
-			dbg("reconnect tick: socket NOT found at %s", SOCKET_PATH)
-		end
+		-- connect() checks socket existence itself; no duplicate fs_stat here
+		dbg("reconnect tick: calling connect()")
+		vim.schedule(function()
+			M.connect()
+		end)
 	end)
 end
 
@@ -162,6 +177,7 @@ end
 
 --- Attempt to connect to the bridge socket.
 function M.connect()
+	-- pipe non-nil means a connect is in-flight (callback not yet called)
 	dbg("connect() called: connected=%s, pipe=%s", tostring(connected), tostring(pipe))
 	if connected or pipe then
 		dbg("connect() BAILED: already connected or pipe exists")
@@ -176,46 +192,54 @@ function M.connect()
 		return
 	end
 
-	dbg("connect(): socket found, creating pipe and connecting...")
+	-- Increment generation so stale callbacks from a previous connect() bail
+	connection_gen = connection_gen + 1
+	local my_gen = connection_gen
+
+	dbg("connect(): socket found, creating pipe (gen=%d)...", my_gen)
 	pipe = uv.new_pipe(false)
 
 	pipe:connect(SOCKET_PATH, function(err)
 		if err then
-			-- Connection failed, try again later
 			dbg("connect(): pipe:connect FAILED: %s", tostring(err))
-			if pipe and not pipe:is_closing() then
-				pipe:close()
+			if my_gen == connection_gen then
+				close_and_reconnect()
 			end
-			pipe = nil
-			start_reconnect()
 			return
 		end
 
-		dbg("connect(): pipe:connect SUCCESS, setting up read_start")
+		dbg("connect(): pipe:connect SUCCESS (gen=%d), setting up read_start", my_gen)
 
 		-- Detect server disconnection (bridge restart/crash).
 		-- The bridge never writes to clients, so any data or EOF means the
 		-- connection is dead. Without this, `connected` stays true forever
 		-- because nothing reads the kernel-buffered EOF after the server exits.
 		pipe:read_start(function(read_err, data)
-			dbg("read_start FIRED: err=%s, data=%s", tostring(read_err), tostring(data))
+			dbg("read_start FIRED (gen=%d): err=%s, data=%s", my_gen, tostring(read_err), tostring(data))
 			if read_err or not data then
-				dbg("read_start: EOF/error detected — marking disconnected, starting reconnect")
 				vim.schedule(function()
-					connected = false
-					if pipe and not pipe:is_closing() then
-						pipe:close()
+					-- Stale callback — a newer connect() has superseded us
+					if my_gen ~= connection_gen then
+						dbg("read_start: stale gen=%d (current=%d), ignoring", my_gen, connection_gen)
+						return
 					end
-					pipe = nil
-					start_reconnect()
+					dbg("read_start: EOF/error detected — disconnecting (gen=%d)", my_gen)
+					connection_gen = connection_gen + 1
+					close_and_reconnect()
 				end)
 			end
 		end)
 
 		vim.schedule(function()
+			-- Stale callback — EOF already fired before we got scheduled
+			if my_gen ~= connection_gen then
+				dbg("connect(): stale gen=%d (current=%d), not marking connected", my_gen, connection_gen)
+				return
+			end
+
 			connected = true
 			stop_reconnect()
-			dbg("connect(): CONNECTED — sending hello + sync")
+			dbg("connect(): CONNECTED (gen=%d) — sending hello + sync", my_gen)
 
 			-- Send hello
 			send({
@@ -277,15 +301,19 @@ end
 --- Notify bridge of a title update (debounced).
 --- @param buf number Buffer ID
 function M.notify_title(buf)
-	-- Debounce: cancel pending update and schedule new one
+	-- Cancel pending debounce timer (capture into local to avoid identity races)
 	if title_debounce_timer then
-		if not title_debounce_timer:is_closing() then
-			title_debounce_timer:stop()
-			title_debounce_timer:close()
-		end
+		local t = title_debounce_timer
 		title_debounce_timer = nil
+		if not t:is_closing() then
+			t:stop()
+			t:close()
+		end
 	end
 
+	-- One-shot timer (repeat=0) auto-stops after firing; no close-from-callback
+	-- needed. This avoids the bug where the callback checks title_debounce_timer
+	-- by identity but it has already been replaced by a newer timer.
 	title_debounce_timer = uv.new_timer()
 	title_debounce_timer:start(TITLE_DEBOUNCE_MS, 0, function()
 		vim.schedule(function()
@@ -296,10 +324,6 @@ function M.notify_title(buf)
 				buf = buf,
 				title = title,
 			})
-			if title_debounce_timer and not title_debounce_timer:is_closing() then
-				title_debounce_timer:close()
-			end
-			title_debounce_timer = nil
 		end)
 	end)
 end
@@ -313,32 +337,39 @@ end
 
 --- Clean disconnect (called from orchestrator.teardown).
 function M.disconnect()
-	-- Send goodbye before disconnecting
-	if connected then
-		send({
-			type = "goodbye",
-			nvim_pid = nvim_pid,
-		})
-	end
-
+	-- Mark disconnected first to prevent racing callbacks from sending messages
+	-- or starting reconnect timers during teardown
+	local was_connected = connected
+	connected = false
 	stop_reconnect()
 
+	-- Clean up title debounce timer
 	if title_debounce_timer then
-		if not title_debounce_timer:is_closing() then
-			title_debounce_timer:stop()
-			title_debounce_timer:close()
-		end
+		local t = title_debounce_timer
 		title_debounce_timer = nil
-	end
-
-	if pipe then
-		if not pipe:is_closing() then
-			pipe:close()
+		if not t:is_closing() then
+			t:stop()
+			t:close()
 		end
-		pipe = nil
 	end
 
-	connected = false
+	-- Send goodbye directly on the still-open pipe (bypassing send()'s
+	-- connected guard which we just set to false)
+	if was_connected and pipe and not pipe:is_closing() then
+		local ok, json = pcall(vim.json.encode, { type = "goodbye", nvim_pid = nvim_pid })
+		if ok then
+			pcall(function()
+				pipe:write(json .. "\n")
+			end)
+		end
+	end
+
+	-- Close pipe
+	local p = pipe
+	pipe = nil
+	if p and not p:is_closing() then
+		p:close()
+	end
 end
 
 return M
