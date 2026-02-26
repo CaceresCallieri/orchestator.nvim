@@ -378,7 +378,7 @@ end
 --- @param filepath string Path to temp file containing the transcription text
 --- @param submit boolean If true, append newline (Enter) after text
 --- @param target_buf number|nil Specific buffer to target (-1 or nil = use internal heuristic)
---- @return string JSON result: {"ok": bool, "error"?: string, "instance_cwd"?: string}
+--- @return string JSON result: {"ok": bool, "submitted"?: bool, "error"?: string, "instance_cwd"?: string}
 function M.stt_inject(filepath, submit, target_buf)
 	-- Read text from temp file
 	local file = io.open(filepath, "r")
@@ -450,23 +450,53 @@ function M.stt_inject(filepath, submit, target_buf)
 		return vim.json.encode({ ok = false, error = "chan_send_failed: " .. tostring(err) })
 	end
 
-	-- Schedule Enter after delay so Ink processes text and Enter as separate events.
-	-- When text+Enter arrive in one PTY write, Ink batches them as a "paste" and
-	-- inserts the newline literally. A 100ms gap ensures separate read() calls.
-	-- Must use \r (CR, 0x0D) — this is what physical Enter produces in raw mode.
-	-- Node.js readline maps \r to key.name='return'; Ink checks key.return for submit.
-	-- \n (LF, 0x0A) does NOT trigger submit — it's just a line feed character.
+	local submitted = false
+
 	if submit then
-		local job_id = target.job_id
-		vim.defer_fn(function()
-			pcall(vim.api.nvim_chan_send, job_id, "\r")
-		end, 100)
+		-- Event-driven submit: attach on_lines listener to terminal buffer,
+		-- wait for it to fire (confirms text was delivered, rendered by Ink,
+		-- and echoed back via PTY round-trip). on_lines fires ~10ms after
+		-- chan_send due to libvterm's REFRESH_DELAY.
+		--
+		-- Sending \r in a separate event loop iteration guarantees a separate
+		-- write() syscall, which Ink sees as a standalone stdin.read() chunk.
+		-- This ensures \r is processed as a keypress (submit), not as part
+		-- of a paste (literal newline insertion).
+		local text_confirmed = false
+		local attach_ok = pcall(vim.api.nvim_buf_attach, target.buf, false, {
+			on_lines = function()
+				text_confirmed = true
+				return true -- detach after first fire
+			end,
+		})
+
+		if attach_ok then
+			-- vim.wait spins the event loop, processing on_lines callbacks and
+			-- terminal refresh timers. 1500ms leaves headroom before the bash
+			-- script's external timeout kills the process.
+			vim.wait(1500, function() return text_confirmed end, 5)
+
+			if text_confirmed then
+				local enter_ok = pcall(vim.api.nvim_chan_send, target.job_id, "\r")
+				if enter_ok then
+					submitted = true
+				end
+			end
+			-- Timeout: text was injected (chan_send succeeded) but echo wasn't
+			-- detected. Skip Enter to avoid submitting in an unknown state.
+			-- Caller sees ok=true, submitted=false.
+		end
+		-- attach_ok=false: buffer invalid/detached. Text injected, submit skipped.
 	end
 
 	-- Clean up temp file (best-effort)
 	os.remove(filepath)
 
-	return vim.json.encode({ ok = true, instance_cwd = target.cwd })
+	return vim.json.encode({
+		ok = true,
+		submitted = submitted,
+		instance_cwd = target.cwd,
+	})
 end
 
 -- ============================================================
