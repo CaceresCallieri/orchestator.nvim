@@ -121,6 +121,7 @@ local function handle_disconnect()
 	if p and not p:is_closing() then
 		p:close()
 	end
+	start_watching()
 end
 
 -- ============================================================
