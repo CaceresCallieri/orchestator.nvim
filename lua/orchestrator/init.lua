@@ -453,28 +453,30 @@ function M.stt_inject(filepath, submit, target_buf)
 	local submitted = false
 
 	if submit then
-		-- Event-driven submit: attach on_lines listener to terminal buffer,
-		-- wait for it to fire (confirms text was delivered, rendered by Ink,
-		-- and echoed back via PTY round-trip). on_lines fires ~10ms after
-		-- chan_send due to libvterm's REFRESH_DELAY.
-		--
-		-- Sending \r in a separate event loop iteration guarantees a separate
-		-- write() syscall, which Ink sees as a standalone stdin.read() chunk.
-		-- This ensures \r is processed as a keypress (submit), not as part
-		-- of a paste (literal newline insertion).
+		-- Snapshot terminal buffer state before sending text. on_lines fires
+		-- for ANY buffer change (decorations, statusline, other plugins), so
+		-- we must verify the actual content changed before confirming delivery.
+		local buf_line_count = vim.api.nvim_buf_line_count(target.buf)
+		local last_line_before = (vim.api.nvim_buf_get_lines(target.buf, -2, -1, false)[1]) or ""
+
 		local text_confirmed = false
 		local attach_ok = pcall(vim.api.nvim_buf_attach, target.buf, false, {
-			on_lines = function()
-				text_confirmed = true
-				return true -- detach after first fire
+			on_lines = function(_, _, _, first_line)
+				-- Only consider changes near the end of the buffer where
+				-- terminal echo appears (ignore statusline/decoration noise)
+				if first_line >= buf_line_count - 2 then
+					local last_line_now = (vim.api.nvim_buf_get_lines(target.buf, -2, -1, false)[1]) or ""
+					if last_line_now ~= last_line_before then
+						text_confirmed = true
+						return true -- detach
+					end
+				end
+				-- Don't detach — keep watching for the real echo
 			end,
 		})
 
 		if attach_ok then
-			-- vim.wait spins the event loop, processing on_lines callbacks and
-			-- terminal refresh timers. 1500ms leaves headroom before the bash
-			-- script's external timeout kills the process.
-			vim.wait(1500, function() return text_confirmed end, 5)
+			vim.wait(1500, function() return text_confirmed end, 50)
 
 			if text_confirmed then
 				local enter_ok = pcall(vim.api.nvim_chan_send, target.job_id, "\r")
