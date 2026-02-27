@@ -261,14 +261,6 @@ function M.connect()
 
 			-- Send full sync
 			M.send_sync()
-
-			-- Restore active-agent state in the bridge.
-			-- send_sync() includes `active` per-instance, but also send an
-			-- explicit focus message so the bridge's focus handler fires
-			-- (e.g., for any side-effects beyond the instance data).
-			if state.state.last_active_buf then
-				M.notify_focus(state.state.last_active_buf)
-			end
 		end)
 	end)
 end
