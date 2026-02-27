@@ -216,6 +216,10 @@ function M.spawn(spawn_type, opts)
 	-- Switch to the buffer (full-screen style)
 	vim.api.nvim_set_current_buf(buf)
 
+	-- Inject agent ID for Symmetria activity tracking hooks
+	local agent_id = string.format("%d_%d", vim.uv.getpid(), buf)
+	cmd = string.format("env SYMMETRIA_AGENT_ID=%s %s", agent_id, cmd)
+
 	-- Spawn terminal with Claude command
 	local job_id = vim.fn.termopen(cmd, {
 		cwd = cwd,
