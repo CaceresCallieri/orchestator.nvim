@@ -178,6 +178,7 @@ local function build_instance_data(inst)
 		dangerous = inst.dangerous or false,
 		title = status_bar.get_instance_title(inst.buf) or "",
 		spawned_at = inst.spawned_at or 0,
+		active = (inst.buf == state.state.last_active_buf),
 	}
 end
 
@@ -260,6 +261,14 @@ function M.connect()
 
 			-- Send full sync
 			M.send_sync()
+
+			-- Restore active-agent state in the bridge.
+			-- send_sync() includes `active` per-instance, but also send an
+			-- explicit focus message so the bridge's focus handler fires
+			-- (e.g., for any side-effects beyond the instance data).
+			if state.state.last_active_buf then
+				M.notify_focus(state.state.last_active_buf)
+			end
 		end)
 	end)
 end
