@@ -27,8 +27,8 @@ local BUBBLE_LEFT = "" -- U+E0B6 (left semicircle)
 local BUBBLE_RIGHT = "" -- U+E0B4 (right semicircle)
 
 
--- Dangerous mode indicator (warning sign U+26A0)
-local DANGER_INDICATOR = "⚠ "
+-- Permission-restricted mode indicator (lock U+F023 - nerd font)
+local LOCKED_INDICATOR = " "
 
 -- Padding around instance content
 local INSTANCE_PADDING = "  " -- Two spaces on each side
@@ -162,18 +162,18 @@ local function build_winbar_string()
 				and highlights.get_instance_active_cap_highlight(inst.color_idx)
 			or highlights.get_instance_dim_cap_highlight(inst.color_idx)
 
-		-- Build content: padding + (danger?) + number + (separator + title)? + padding
-		local danger_prefix = inst.dangerous and DANGER_INDICATOR or ""
+		-- Build content: padding + (lock?) + number + (separator + title)? + padding
+		local mode_prefix = (not inst.dangerous) and LOCKED_INDICATOR or ""
 		local number_str = tostring(inst.number)
 		local title = title_cache[inst.buf]
 		local content
 
 		if title then
-			content = INSTANCE_PADDING .. danger_prefix .. number_str .. config.title.separator .. title .. INSTANCE_PADDING
+			content = INSTANCE_PADDING .. mode_prefix .. number_str .. config.title.separator .. title .. INSTANCE_PADDING
 		elseif config.title.fallback then
-			content = INSTANCE_PADDING .. danger_prefix .. number_str .. config.title.separator .. config.title.fallback .. INSTANCE_PADDING
+			content = INSTANCE_PADDING .. mode_prefix .. number_str .. config.title.separator .. config.title.fallback .. INSTANCE_PADDING
 		else
-			content = INSTANCE_PADDING .. danger_prefix .. number_str .. INSTANCE_PADDING
+			content = INSTANCE_PADDING .. mode_prefix .. number_str .. INSTANCE_PADDING
 		end
 
 		-- Add bubble: left_cap + content + right_cap

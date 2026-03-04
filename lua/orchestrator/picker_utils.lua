@@ -40,14 +40,14 @@ function M.build_instance_text(inst)
 		spawn_label = " [continued]"
 	end
 
-	local danger_prefix = inst.dangerous and "⚠ " or ""
+	local mode_prefix = (not inst.dangerous) and " " or ""
 	local title = status_bar.get_instance_title(inst.buf)
 	local title_part = title and (" - " .. title) or ""
 	local time_ago = M.format_time_ago(inst.spawned_at)
 
 	return string.format(
 		"%s[%d] Claude%s%s - %s",
-		danger_prefix,
+		mode_prefix,
 		inst.number,
 		spawn_label,
 		title_part,

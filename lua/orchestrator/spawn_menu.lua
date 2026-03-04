@@ -47,17 +47,17 @@ end
 local function build_menu_content()
 	local lines = {
 		"",
-		"  n   New Claude",
-		"  c   Continue Claude",
-		"  r   Resume Claude",
+		"  n   New Claude (dangerous)",
+		"  c   Continue Claude (dangerous)",
+		"  r   Resume Claude (dangerous)",
 	}
 
-	-- Only show dangerous options if enabled in config
+	-- Only show normal (non-dangerous) options if dangerous mode is enabled
 	if is_dangerous_mode_enabled() then
 		table.insert(lines, "")
-		table.insert(lines, "  N   New (dangerous)")
-		table.insert(lines, "  C   Continue (dangerous)")
-		table.insert(lines, "  R   Resume (dangerous)")
+		table.insert(lines, "  N   New Claude")
+		table.insert(lines, "  C   Continue Claude")
+		table.insert(lines, "  R   Resume Claude")
 	end
 
 	table.insert(lines, "")
@@ -134,7 +134,7 @@ local function apply_highlights(buf, lines)
 		-- Match key bindings: "  n   " or "  N   "
 		local key = line:match("^%s+([ncrNCR])%s+")
 		if key then
-			local is_dangerous = key:match("[NCR]")
+			local is_dangerous = key:match("[ncr]")
 			local group = is_dangerous and "OrchestratorSpawnMenuDanger" or "OrchestratorSpawnMenuKey"
 
 			-- Highlight the key character (at column 2, length 1)
@@ -178,17 +178,18 @@ local function setup_keymaps(buf)
 	local opts = { buffer = buf, noremap = true, silent = true }
 
 	-- Spawn configurations: key -> {spawn_type, dangerous}
+	-- Lowercase = dangerous (quick access), Uppercase = normal
 	local spawn_configs = {
-		{ key = "n", spawn_type = "fresh", dangerous = false },
-		{ key = "c", spawn_type = "continue", dangerous = false },
-		{ key = "r", spawn_type = "resume", dangerous = false },
+		{ key = "n", spawn_type = "fresh", dangerous = true },
+		{ key = "c", spawn_type = "continue", dangerous = true },
+		{ key = "r", spawn_type = "resume", dangerous = true },
 	}
 
-	-- Add dangerous spawn options if enabled
+	-- Add normal (non-dangerous) spawn options if dangerous mode is enabled
 	if is_dangerous_mode_enabled() then
-		table.insert(spawn_configs, { key = "N", spawn_type = "fresh", dangerous = true })
-		table.insert(spawn_configs, { key = "C", spawn_type = "continue", dangerous = true })
-		table.insert(spawn_configs, { key = "R", spawn_type = "resume", dangerous = true })
+		table.insert(spawn_configs, { key = "N", spawn_type = "fresh", dangerous = false })
+		table.insert(spawn_configs, { key = "C", spawn_type = "continue", dangerous = false })
+		table.insert(spawn_configs, { key = "R", spawn_type = "resume", dangerous = false })
 	end
 
 	-- Setup keymaps from config
