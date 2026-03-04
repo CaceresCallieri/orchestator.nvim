@@ -40,7 +40,7 @@ function M.build_instance_text(inst)
 		spawn_label = " [continued]"
 	end
 
-	local mode_prefix = (not inst.dangerous) and " " or ""
+	local mode_prefix = (not inst.dangerous) and " " or "" -- lock U+F023 + space separator
 	local title = status_bar.get_instance_title(inst.buf)
 	local title_part = title and (" - " .. title) or ""
 	local time_ago = M.format_time_ago(inst.spawned_at)

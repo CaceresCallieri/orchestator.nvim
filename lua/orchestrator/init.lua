@@ -1025,6 +1025,7 @@ function M.setup(opts)
 	editor.set_config(config)
 	spawn_menu.set_terminal(terminal)
 	spawn_menu.set_config(config)
+	spawn_menu.set_spawn_fn(M.spawn)
 	edit_tracker.set_instances(instances)
 	edit_tracker.set_picker(picker)
 

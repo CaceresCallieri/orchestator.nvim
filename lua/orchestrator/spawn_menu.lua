@@ -18,6 +18,9 @@ local config = {
 ---@type table|nil
 local terminal = nil
 
+---@type function|nil
+local spawn_fn = nil
+
 ---@type table|nil
 local plugin_config = nil
 
@@ -33,6 +36,12 @@ function M.set_config(cfg)
 	plugin_config = cfg
 end
 
+--- Set spawn function reference (called from init.lua)
+--- @param fn function The spawn function (init.M.spawn)
+function M.set_spawn_fn(fn)
+	spawn_fn = fn
+end
+
 --- Check if dangerous mode is enabled in config
 --- @return boolean enabled
 local function is_dangerous_mode_enabled()
@@ -45,20 +54,20 @@ end
 --- Build menu content lines based on config
 --- @return table lines Array of strings for menu content
 local function build_menu_content()
-	local lines = {
-		"",
-		"  n   New Claude (dangerous)",
-		"  c   Continue Claude (dangerous)",
-		"  r   Resume Claude (dangerous)",
-	}
+	local lines = { "" }
 
-	-- Only show normal (non-dangerous) options if dangerous mode is enabled
+	-- Show dangerous (lowercase) options only if dangerous mode is enabled
 	if is_dangerous_mode_enabled() then
+		table.insert(lines, "  n   New Claude (dangerous)")
+		table.insert(lines, "  c   Continue Claude (dangerous)")
+		table.insert(lines, "  r   Resume Claude (dangerous)")
 		table.insert(lines, "")
-		table.insert(lines, "  N   New Claude")
-		table.insert(lines, "  C   Continue Claude")
-		table.insert(lines, "  R   Resume Claude")
 	end
+
+	-- Normal options are always available
+	table.insert(lines, "  N   New Claude")
+	table.insert(lines, "  C   Continue Claude")
+	table.insert(lines, "  R   Resume Claude")
 
 	table.insert(lines, "")
 	table.insert(lines, "  Press Esc or q to close")
@@ -134,18 +143,16 @@ local function apply_highlights(buf, lines)
 		-- Match key bindings: "  n   " or "  N   "
 		local key = line:match("^%s+([ncrNCR])%s+")
 		if key then
-			local is_dangerous = key:match("[ncr]")
-			local group = is_dangerous and "OrchestratorSpawnMenuDanger" or "OrchestratorSpawnMenuKey"
+			local is_dangerous_key = key:match("[ncr]") ~= nil
+			local group = is_dangerous_key and "OrchestratorSpawnMenuDanger" or "OrchestratorSpawnMenuKey"
 
 			-- Highlight the key character (at column 2, length 1)
 			vim.api.nvim_buf_add_highlight(buf, ns_id, group, line_idx, 2, 3)
 
-			-- Highlight "(dangerous)" suffix for dangerous options
-			if is_dangerous then
-				local danger_start = line:find("%(dangerous%)")
-				if danger_start then
-					vim.api.nvim_buf_add_highlight(buf, ns_id, group, line_idx, danger_start - 1, -1)
-				end
+			-- Highlight "(dangerous)" suffix if present
+			local danger_start = line:find("%(dangerous%)")
+			if danger_start then
+				vim.api.nvim_buf_add_highlight(buf, ns_id, "OrchestratorSpawnMenuDanger", line_idx, danger_start - 1, -1)
 			end
 		elseif line:match("Press Esc or q") then
 			-- Dismiss hint (dimmed)
@@ -160,7 +167,7 @@ end
 --- @param spawn_type string "fresh" | "continue" | "resume"
 --- @param dangerous boolean Whether to use --dangerously-skip-permissions
 local function spawn_and_close(spawn_type, dangerous)
-	if not terminal then
+	if not spawn_fn then
 		vim.notify("Terminal module not available", vim.log.levels.ERROR)
 		return
 	end
@@ -169,7 +176,7 @@ local function spawn_and_close(spawn_type, dangerous)
 	M.close()
 
 	-- Spawn after menu is closed
-	terminal.spawn(spawn_type, { dangerous = dangerous })
+	spawn_fn(spawn_type, { dangerous = dangerous })
 end
 
 --- Setup buffer-local keymaps for the menu
@@ -178,18 +185,18 @@ local function setup_keymaps(buf)
 	local opts = { buffer = buf, noremap = true, silent = true }
 
 	-- Spawn configurations: key -> {spawn_type, dangerous}
-	-- Lowercase = dangerous (quick access), Uppercase = normal
+	-- Normal options (uppercase) are always available
 	local spawn_configs = {
-		{ key = "n", spawn_type = "fresh", dangerous = true },
-		{ key = "c", spawn_type = "continue", dangerous = true },
-		{ key = "r", spawn_type = "resume", dangerous = true },
+		{ key = "N", spawn_type = "fresh", dangerous = false },
+		{ key = "C", spawn_type = "continue", dangerous = false },
+		{ key = "R", spawn_type = "resume", dangerous = false },
 	}
 
-	-- Add normal (non-dangerous) spawn options if dangerous mode is enabled
+	-- Dangerous options (lowercase) only if dangerous mode is enabled
 	if is_dangerous_mode_enabled() then
-		table.insert(spawn_configs, { key = "N", spawn_type = "fresh", dangerous = false })
-		table.insert(spawn_configs, { key = "C", spawn_type = "continue", dangerous = false })
-		table.insert(spawn_configs, { key = "R", spawn_type = "resume", dangerous = false })
+		table.insert(spawn_configs, { key = "n", spawn_type = "fresh", dangerous = true })
+		table.insert(spawn_configs, { key = "c", spawn_type = "continue", dangerous = true })
+		table.insert(spawn_configs, { key = "r", spawn_type = "resume", dangerous = true })
 	end
 
 	-- Setup keymaps from config

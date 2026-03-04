@@ -27,7 +27,7 @@ local BUBBLE_LEFT = "" -- U+E0B6 (left semicircle)
 local BUBBLE_RIGHT = "" -- U+E0B4 (right semicircle)
 
 
--- Permission-restricted mode indicator (lock U+F023 - nerd font)
+-- Permission-restricted mode indicator (lock U+F023 - nerd font, trailing space is separator)
 local LOCKED_INDICATOR = " "
 
 -- Padding around instance content
