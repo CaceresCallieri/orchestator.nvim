@@ -5,6 +5,18 @@
 ---@class OrchestratorModule
 local M = {}
 
+-- Unified debug log (shared timeline with Symmetria QML/C++/bash)
+local _stt_log_path = (os.getenv("XDG_STATE_HOME") or (os.getenv("HOME") .. "/.local/state"))
+	.. "/symmetria/debug.log"
+local function _stt_log(msg)
+	local f = io.open(_stt_log_path, "a")
+	if f then
+		local ms = math.floor((vim.uv.hrtime() / 1e6) % 1000)
+		f:write(string.format("%s.%03d [lua:stt] %s\n", os.date("%H:%M:%S"), ms, msg))
+		f:close()
+	end
+end
+
 -- ============================================================
 -- CONFIGURATION
 -- ============================================================
@@ -445,60 +457,80 @@ function M.stt_inject(filepath, submit, target_buf)
 	end
 
 	-- Send text to terminal (without Enter — sent separately below)
+	local text_len = #text
+	_stt_log(string.format("chan_send | buf=%d job=%d textLen=%d submit=%s",
+		target.buf, target.job_id, text_len, tostring(submit)))
+
 	local ok, err = pcall(vim.api.nvim_chan_send, target.job_id, text)
 	if not ok then
+		_stt_log(string.format("chan_send FAILED: %s", tostring(err)))
 		return vim.json.encode({ ok = false, error = "chan_send_failed: " .. tostring(err) })
 	end
+	_stt_log(string.format("chan_send OK | textLen=%d", text_len))
 
 	local submitted = false
 
 	if submit then
-		-- Snapshot terminal buffer state before sending text. on_lines fires
-		-- for ANY buffer change (decorations, statusline, other plugins), so
-		-- we must verify the actual content changed before confirming delivery.
-		local buf_line_count = vim.api.nvim_buf_line_count(target.buf)
-		local last_line_before = (vim.api.nvim_buf_get_lines(target.buf, -2, -1, false)[1]) or ""
-
+		-- Event-driven submit: attach on_lines listener to terminal buffer,
+		-- wait for it to fire (confirms buffer was updated after chan_send).
+		--
+		-- Terminal buffers are purely libvterm-driven (no statusline,
+		-- signcolumn, or decoration noise), so any on_lines event after
+		-- chan_send reflects real PTY output — we trust it directly.
+		--
+		-- Sending \r in a separate event loop iteration guarantees a separate
+		-- write() syscall, which Ink sees as a standalone stdin.read() chunk.
+		-- This ensures \r is processed as a keypress (submit), not as part
+		-- of a paste (literal newline insertion).
 		local text_confirmed = false
+		local on_lines_count = 0
 		local attach_ok = pcall(vim.api.nvim_buf_attach, target.buf, false, {
-			on_lines = function(_, _, _, first_line)
-				-- Only consider changes near the end of the buffer where
-				-- terminal echo appears (ignore statusline/decoration noise)
-				if first_line >= buf_line_count - 2 then
-					local last_line_now = (vim.api.nvim_buf_get_lines(target.buf, -2, -1, false)[1]) or ""
-					if last_line_now ~= last_line_before then
-						text_confirmed = true
-						return true -- detach
-					end
-				end
-				-- Don't detach — keep watching for the real echo
+			on_lines = function()
+				on_lines_count = on_lines_count + 1
+				text_confirmed = true
+				return true -- detach after first fire
 			end,
 		})
 
+		_stt_log(string.format("buf_attach | ok=%s buf=%d",
+			tostring(attach_ok), target.buf))
+
 		if attach_ok then
+			-- vim.wait spins the event loop, processing on_lines callbacks and
+			-- terminal refresh timers. 1500ms leaves headroom before the bash
+			-- script's external timeout kills the process.
+			local wait_start = vim.uv.hrtime()
 			vim.wait(1500, function() return text_confirmed end, 50)
+			local wait_ms = (vim.uv.hrtime() - wait_start) / 1e6
+
+			_stt_log(string.format("vim.wait done | confirmed=%s waitMs=%.1f onLinesCount=%d",
+				tostring(text_confirmed), wait_ms, on_lines_count))
 
 			if text_confirmed then
-				local enter_ok = pcall(vim.api.nvim_chan_send, target.job_id, "\r")
+				local enter_ok, enter_err = pcall(vim.api.nvim_chan_send, target.job_id, "\r")
+				_stt_log(string.format("Enter sent | ok=%s err=%s",
+					tostring(enter_ok), tostring(enter_err)))
 				if enter_ok then
 					submitted = true
 				end
+			else
+				_stt_log("TIMEOUT — on_lines never fired, Enter skipped")
 			end
-			-- Timeout: text was injected (chan_send succeeded) but echo wasn't
-			-- detected. Skip Enter to avoid submitting in an unknown state.
-			-- Caller sees ok=true, submitted=false.
+		else
+			_stt_log("buf_attach FAILED — Enter skipped")
 		end
-		-- attach_ok=false: buffer invalid/detached. Text injected, submit skipped.
 	end
 
 	-- Clean up temp file (best-effort)
 	os.remove(filepath)
 
-	return vim.json.encode({
+	local result = vim.json.encode({
 		ok = true,
 		submitted = submitted,
 		instance_cwd = target.cwd,
 	})
+	_stt_log(string.format("returning | %s", result))
+	return result
 end
 
 -- ============================================================
