@@ -77,7 +77,8 @@ local function get_instance_title(buf)
 	end
 
 	-- Strip leading non-word characters (e.g., sparkle icons set by Claude via OSC 2)
-	title = title:gsub("^[%W%s]+", "")
+	-- %W matches anything not alphanumeric or underscore (which covers whitespace too)
+	title = title:gsub("^%W+", "")
 	if title == "" then
 		return nil
 	end

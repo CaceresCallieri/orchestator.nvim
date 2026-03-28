@@ -417,7 +417,8 @@ function M.stt_inject(filepath, submit, target_buf)
 	-- last_active_buf caused wrong-agent delivery when the user switched
 	-- agents during recording and the original buf became invalid.
 	if target_buf and target_buf > 0 then
-		if vim.api.nvim_buf_is_valid(target_buf) then
+		local buf_valid = vim.api.nvim_buf_is_valid(target_buf)
+		if buf_valid then
 			for _, inst in ipairs(all_instances) do
 				if inst.buf == target_buf then
 					target = inst
@@ -427,13 +428,10 @@ function M.stt_inject(filepath, submit, target_buf)
 		end
 		if not target then
 			_stt_log(string.format("target_buf=%d specified but not found (valid=%s, instances=%d) — refusing silent fallback",
-				target_buf, tostring(vim.api.nvim_buf_is_valid(target_buf)), #all_instances))
+				target_buf, tostring(buf_valid), #all_instances))
 			return vim.json.encode({ ok = false, error = "target_buf_invalid", target_buf = target_buf })
 		end
 	end
-
-	-- Heuristic fallback: only used when NO explicit target_buf was passed
-	-- (target_buf <= 0 or nil), meaning the QML side couldn't determine the target.
 
 	-- Fallback 1: last_active_buf → find matching instance
 	if not target and state.state.last_active_buf then
