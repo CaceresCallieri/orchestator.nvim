@@ -76,11 +76,11 @@ function M.setup()
 
 	-- Create highlight groups for each instance color
 	-- OrchestratorClaude1 through OrchestratorClaude8
-	for i, color in ipairs(M.instance_colors) do
-		-- Dimmed variants for inactive agents
-		local dimmed_fg = dim_color(color.fg, DIM_FACTOR)
+	local dimmed_white = dim_color(M.colors.white, DIM_FACTOR)
+	local dimmed_matte = dim_color(M.colors.matte_charcoal, DIM_FACTOR)
 
-		-- Active instance: white text on matte charcoal background
+	for i, color in ipairs(M.instance_colors) do
+		-- Active instance: full-brightness white text on matte charcoal
 		vim.api.nvim_set_hl(0, "OrchestratorClaude" .. i .. "Active", {
 			fg = M.colors.white,
 			bg = M.colors.matte_charcoal,
@@ -93,16 +93,15 @@ function M.setup()
 			bg = "NONE",
 		})
 
-		-- Inactive instance: white text on matte charcoal background
+		-- Inactive instance: dimmed text + dimmed bg (simulates reduced opacity)
 		vim.api.nvim_set_hl(0, "OrchestratorClaude" .. i .. "Dim", {
-			fg = M.colors.white,
-			bg = M.colors.matte_charcoal,
-			bold = true,
+			fg = dimmed_white,
+			bg = dimmed_matte,
 		})
 
-		-- Inactive bubble cap: matte charcoal foreground on transparent (for powerline semicircles)
+		-- Inactive bubble cap: dimmed matte foreground (pill fades with content)
 		vim.api.nvim_set_hl(0, "OrchestratorClaude" .. i .. "DimCap", {
-			fg = M.colors.matte_charcoal,
+			fg = dimmed_matte,
 			bg = "NONE",
 		})
 
