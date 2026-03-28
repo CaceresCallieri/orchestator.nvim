@@ -177,7 +177,7 @@ local function build_winbar_string()
 		end
 
 		-- Add bubble: left_cap + content + right_cap
-		-- Caps use cap_hl (colored fg, transparent bg), body uses body_hl (dark fg, colored bg)
+		-- Caps use cap_hl (matte charcoal fg, transparent bg), body uses body_hl (colored fg, matte charcoal bg)
 		table.insert(parts, string.format("%%#%s#%s", cap_hl, BUBBLE_LEFT))
 		table.insert(parts, string.format("%%#%s#%s", body_hl, content))
 		table.insert(parts, string.format("%%#%s#%s", cap_hl, BUBBLE_RIGHT))

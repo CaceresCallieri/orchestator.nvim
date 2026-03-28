@@ -7,9 +7,10 @@ local M = {}
 
 -- Base colors (from wine theme)
 M.colors = {
-	white = "#DDDDDD", -- fg_primary from wine theme
+	white = "#C2C2C2", -- matched to lualine terminal mode text
 	black = "#131313", -- bg_primary from wine theme
 	yellow = "#fdd888", -- func from wine theme
+	matte_charcoal = "#1f1f1f", -- Symmetria matte pill background
 }
 
 -- Instance color palette (8 distinct colors for Claude instances)
@@ -79,29 +80,29 @@ function M.setup()
 		-- Dimmed variants for inactive agents
 		local dimmed_fg = dim_color(color.fg, DIM_FACTOR)
 
-		-- Active instance: dark text on colored background (full brightness)
+		-- Active instance: white text on matte charcoal background
 		vim.api.nvim_set_hl(0, "OrchestratorClaude" .. i .. "Active", {
-			fg = M.colors.black,
-			bg = color.fg,
+			fg = M.colors.white,
+			bg = M.colors.matte_charcoal,
 			bold = true,
 		})
 
-		-- Active bubble cap: colored foreground on transparent (for powerline semicircles)
+		-- Active bubble cap: matte charcoal foreground on transparent (for powerline semicircles)
 		vim.api.nvim_set_hl(0, "OrchestratorClaude" .. i .. "ActiveCap", {
-			fg = color.fg,
+			fg = M.colors.matte_charcoal,
 			bg = "NONE",
 		})
 
-		-- Inactive instance: dark text on dimmed colored background
+		-- Inactive instance: white text on matte charcoal background
 		vim.api.nvim_set_hl(0, "OrchestratorClaude" .. i .. "Dim", {
-			fg = M.colors.black,
-			bg = dimmed_fg,
+			fg = M.colors.white,
+			bg = M.colors.matte_charcoal,
 			bold = true,
 		})
 
-		-- Inactive bubble cap: dimmed foreground on transparent (for powerline semicircles)
+		-- Inactive bubble cap: matte charcoal foreground on transparent (for powerline semicircles)
 		vim.api.nvim_set_hl(0, "OrchestratorClaude" .. i .. "DimCap", {
-			fg = dimmed_fg,
+			fg = M.colors.matte_charcoal,
 			bg = "NONE",
 		})
 
