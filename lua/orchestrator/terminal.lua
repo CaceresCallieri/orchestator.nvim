@@ -28,7 +28,19 @@ local terminal_config = {}
 -- Configuration constants
 local config = {
 	valid_spawn_types = { "fresh", "resume", "continue" },
+	-- Separate tmux server socket so orchestrator sessions never interfere
+	-- with the user's personal tmux. Named socket lives in XDG_RUNTIME_DIR.
+	tmux_socket = "orchestrator",
 }
+
+--- Resolve the path to the bundled tmux.conf shipped with orchestrator.nvim.
+--- Uses debug.getinfo to find this file's location, then walks up to the plugin root.
+---@return string path Absolute path to tmux.conf
+local function get_tmux_conf_path()
+	local source = debug.getinfo(1, "S").source:sub(2) -- strip leading "@"
+	local plugin_root = vim.fn.fnamemodify(source, ":h:h:h") -- lua/orchestrator/terminal.lua → plugin root
+	return plugin_root .. "/tmux.conf"
+end
 
 --- Set the instances module reference (called from init.lua)
 --- @param inst table The instances module
@@ -189,16 +201,6 @@ function M.spawn(spawn_type, opts)
 
 	local cmd_config = M.spawn_types[spawn_type]
 
-	-- Build command from parts: claude [--dangerously-skip-permissions] [action-flags]
-	local cmd_parts = { "claude" }
-	if opts.dangerous then
-		table.insert(cmd_parts, "--dangerously-skip-permissions")
-	end
-	for _, flag in ipairs(cmd_config.flags) do
-		table.insert(cmd_parts, flag)
-	end
-	local cmd = table.concat(cmd_parts, " ")
-
 	-- Verify CLI is installed before attempting to spawn
 	if vim.fn.executable("claude") == 0 then
 		vim.notify(
@@ -207,6 +209,16 @@ function M.spawn(spawn_type, opts)
 		)
 		return nil
 	end
+
+	-- Build the claude command: claude [--dangerously-skip-permissions] [action-flags]
+	local claude_parts = { "claude" }
+	if opts.dangerous then
+		table.insert(claude_parts, "--dangerously-skip-permissions")
+	end
+	for _, flag in ipairs(cmd_config.flags) do
+		table.insert(claude_parts, flag)
+	end
+	local claude_cmd = table.concat(claude_parts, " ")
 
 	local cwd = vim.fn.getcwd()
 
@@ -218,7 +230,30 @@ function M.spawn(spawn_type, opts)
 
 	-- Inject agent ID for Symmetria activity tracking hooks
 	local agent_id = string.format("%d_%d", vim.uv.getpid(), buf)
-	cmd = string.format("env SYMMETRIA_AGENT_ID=%s %s", agent_id, cmd)
+	claude_cmd = string.format("env SYMMETRIA_AGENT_ID=%s %s", agent_id, claude_cmd)
+
+	-- Wrap in tmux to fix terminal rendering (DEC mode 2026 synchronized output).
+	-- tmux buffers sync blocks and renders them atomically, preventing the content
+	-- duplication caused by Neovim's libvterm not supporting mode 2026.
+	-- Uses a dedicated server socket so it never interferes with the user's tmux.
+	local use_tmux = terminal_config.use_tmux ~= false and vim.fn.executable("tmux") == 1
+	local cmd
+	if use_tmux then
+		local session = string.format("claude_%d", buf)
+		local tmux_conf = get_tmux_conf_path()
+		-- Kill any stale session with the same name first (buffer IDs get reused)
+		cmd = string.format(
+			"tmux -L %s kill-session -t %s 2>/dev/null; tmux -L %s -f %s new-session -s %s '%s'",
+			config.tmux_socket,
+			session,
+			config.tmux_socket,
+			tmux_conf,
+			session,
+			claude_cmd
+		)
+	else
+		cmd = claude_cmd
+	end
 
 	-- Spawn terminal with Claude command
 	local job_id = vim.fn.termopen(cmd, {
