@@ -83,6 +83,11 @@ local function get_instance_title(buf)
 		return nil
 	end
 
+	-- Hide generic "Claude Code" title — it adds no value when distinguishing instances
+	if title:lower() == "claude code" then
+		return nil
+	end
+
 	-- Truncate if needed (with proper UTF-8 handling)
 	local display_width = vim.fn.strdisplaywidth(title)
 	if display_width > config.title.max_length then
