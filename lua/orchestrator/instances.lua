@@ -83,6 +83,15 @@ function M.register_spawned(buf, job_id, cwd, spawn_type, dangerous)
 
 	table.insert(state.state.claude_instances, instance)
 
+	-- Fix: BufEnter fires BEFORE registration, so the initial focus event
+	-- is lost (get_by_buf returns nil → notify_focus never called).
+	-- If this buffer is currently focused, update last_active_buf BEFORE
+	-- notify_spawn so build_instance_data() gets the correct active flag.
+	local is_current = (buf == vim.api.nvim_get_current_buf())
+	if is_current then
+		state.state.last_active_buf = buf
+	end
+
 	if status_bar then
 		status_bar.show()
 		status_bar.update()
@@ -90,6 +99,10 @@ function M.register_spawned(buf, job_id, cwd, spawn_type, dangerous)
 
 	if bridge_module then
 		bridge_module.notify_spawn(instance)
+		-- Emit focus so the bridge deactivates other agents in this nvim
+		if is_current then
+			bridge_module.notify_focus(buf)
+		end
 	end
 
 	return instance

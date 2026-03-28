@@ -412,7 +412,10 @@ function M.stt_inject(filepath, submit, target_buf)
 
 	local target = nil
 
-	-- Priority 0: explicit target_buf from stop-time capture
+	-- Priority 0: explicit target_buf from stop-time capture.
+	-- When an explicit buf is passed, it MUST resolve — silent fallback to
+	-- last_active_buf caused wrong-agent delivery when the user switched
+	-- agents during recording and the original buf became invalid.
 	if target_buf and target_buf > 0 then
 		if vim.api.nvim_buf_is_valid(target_buf) then
 			for _, inst in ipairs(all_instances) do
@@ -422,10 +425,17 @@ function M.stt_inject(filepath, submit, target_buf)
 				end
 			end
 		end
-		-- target_buf invalid or not a Claude instance; target stays nil for priority 1/2
+		if not target then
+			_stt_log(string.format("target_buf=%d specified but not found (valid=%s, instances=%d) — refusing silent fallback",
+				target_buf, tostring(vim.api.nvim_buf_is_valid(target_buf)), #all_instances))
+			return vim.json.encode({ ok = false, error = "target_buf_invalid", target_buf = target_buf })
+		end
 	end
 
-	-- Priority 1: last_active_buf → find matching instance
+	-- Heuristic fallback: only used when NO explicit target_buf was passed
+	-- (target_buf <= 0 or nil), meaning the QML side couldn't determine the target.
+
+	-- Fallback 1: last_active_buf → find matching instance
 	if not target and state.state.last_active_buf then
 		for _, inst in ipairs(all_instances) do
 			if inst.buf == state.state.last_active_buf then
@@ -435,7 +445,7 @@ function M.stt_inject(filepath, submit, target_buf)
 		end
 	end
 
-	-- Priority 2: most recently spawned instance
+	-- Fallback 2: most recently spawned instance
 	if not target then
 		local latest = nil
 		for _, inst in ipairs(all_instances) do

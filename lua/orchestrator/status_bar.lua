@@ -76,6 +76,12 @@ local function get_instance_title(buf)
 		end
 	end
 
+	-- Strip leading non-word characters (e.g., sparkle icons set by Claude via OSC 2)
+	title = title:gsub("^[%W%s]+", "")
+	if title == "" then
+		return nil
+	end
+
 	-- Truncate if needed (with proper UTF-8 handling)
 	local display_width = vim.fn.strdisplaywidth(title)
 	if display_width > config.title.max_length then
