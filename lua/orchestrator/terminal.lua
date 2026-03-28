@@ -33,14 +33,13 @@ local config = {
 	tmux_socket = "orchestrator",
 }
 
---- Resolve the path to the bundled tmux.conf shipped with orchestrator.nvim.
---- Uses debug.getinfo to find this file's location, then walks up to the plugin root.
----@return string path Absolute path to tmux.conf
-local function get_tmux_conf_path()
+-- Path to the bundled tmux.conf, resolved once at module load.
+-- debug.getinfo finds this file's location; fnamemodify walks up to the plugin root.
+local tmux_conf_path = (function()
 	local source = debug.getinfo(1, "S").source:sub(2) -- strip leading "@"
 	local plugin_root = vim.fn.fnamemodify(source, ":h:h:h") -- lua/orchestrator/terminal.lua → plugin root
 	return plugin_root .. "/tmux.conf"
-end
+end)()
 
 --- Set the instances module reference (called from init.lua)
 --- @param inst table The instances module
@@ -236,21 +235,31 @@ function M.spawn(spawn_type, opts)
 	-- tmux buffers sync blocks and renders them atomically, preventing the content
 	-- duplication caused by Neovim's libvterm not supporting mode 2026.
 	-- Uses a dedicated server socket so it never interferes with the user's tmux.
-	local use_tmux = terminal_config.use_tmux ~= false and vim.fn.executable("tmux") == 1
+	-- NOTE: on_exit receives tmux's exit code (always 0 on clean session end), not
+	-- Claude's. Abnormal Claude exits will not trigger the exit code warning below.
+	local use_tmux = terminal_config.use_tmux == true and vim.fn.executable("tmux") == 1
 	local cmd
 	if use_tmux then
 		local session = string.format("claude_%d", buf)
-		local tmux_conf = get_tmux_conf_path()
-		-- Kill any stale session with the same name first (buffer IDs get reused)
-		cmd = string.format(
-			"tmux -L %s kill-session -t %s 2>/dev/null; tmux -L %s -f %s new-session -s %s '%s'",
-			config.tmux_socket,
-			session,
-			config.tmux_socket,
-			tmux_conf,
-			session,
-			claude_cmd
-		)
+		-- Guard: verify the bundled tmux.conf exists before using it
+		if not vim.uv.fs_stat(tmux_conf_path) then
+			vim.notify(
+				string.format("orchestrator.nvim: tmux.conf not found at %s — falling back to direct spawn", tmux_conf_path),
+				vim.log.levels.WARN
+			)
+			cmd = claude_cmd
+		else
+			-- Kill any stale session with the same name first (buffer IDs get reused).
+			-- Done via vim.fn.system so the kill side-effect is separate from the spawn command.
+			vim.fn.system(string.format("tmux -L %s kill-session -t %s 2>/dev/null", config.tmux_socket, session))
+			cmd = string.format(
+				"tmux -L %s -f %s new-session -s %s %s",
+				config.tmux_socket,
+				tmux_conf_path,
+				session,
+				vim.fn.shellescape(claude_cmd)
+			)
+		end
 	else
 		cmd = claude_cmd
 	end
