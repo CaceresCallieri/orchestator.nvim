@@ -45,9 +45,6 @@ local default_config = {
 			jump_to_plan = "gP", -- Jump to last plan
 		},
 	},
-	-- Wrap Claude in tmux to fix terminal rendering in Neovim (auto-detected).
-	-- tmux absorbs DEC mode 2026 sync blocks that Neovim's libvterm can't handle.
-	use_tmux = true,
 	-- Dangerous mode configuration (--dangerously-skip-permissions)
 	dangerous_mode = {
 		enabled = true, -- Set to false to completely disable dangerous mode

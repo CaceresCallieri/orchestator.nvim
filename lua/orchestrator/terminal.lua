@@ -28,18 +28,7 @@ local terminal_config = {}
 -- Configuration constants
 local config = {
 	valid_spawn_types = { "fresh", "resume", "continue" },
-	-- Separate tmux server socket so orchestrator sessions never interfere
-	-- with the user's personal tmux. Named socket lives in XDG_RUNTIME_DIR.
-	tmux_socket = "orchestrator",
 }
-
--- Path to the bundled tmux.conf, resolved once at module load.
--- debug.getinfo finds this file's location; fnamemodify walks up to the plugin root.
-local tmux_conf_path = (function()
-	local source = debug.getinfo(1, "S").source:sub(2) -- strip leading "@"
-	local plugin_root = vim.fn.fnamemodify(source, ":h:h:h") -- lua/orchestrator/terminal.lua → plugin root
-	return plugin_root .. "/tmux.conf"
-end)()
 
 --- Set the instances module reference (called from init.lua)
 --- @param inst table The instances module
@@ -209,15 +198,15 @@ function M.spawn(spawn_type, opts)
 		return nil
 	end
 
-	-- Build the claude command: claude [--dangerously-skip-permissions] [action-flags]
-	local claude_parts = { "claude" }
+	-- Build command from parts: claude [--dangerously-skip-permissions] [action-flags]
+	local cmd_parts = { "claude" }
 	if opts.dangerous then
-		table.insert(claude_parts, "--dangerously-skip-permissions")
+		table.insert(cmd_parts, "--dangerously-skip-permissions")
 	end
 	for _, flag in ipairs(cmd_config.flags) do
-		table.insert(claude_parts, flag)
+		table.insert(cmd_parts, flag)
 	end
-	local claude_cmd = table.concat(claude_parts, " ")
+	local cmd = table.concat(cmd_parts, " ")
 
 	local cwd = vim.fn.getcwd()
 
@@ -229,40 +218,7 @@ function M.spawn(spawn_type, opts)
 
 	-- Inject agent ID for Symmetria activity tracking hooks
 	local agent_id = string.format("%d_%d", vim.uv.getpid(), buf)
-	claude_cmd = string.format("env SYMMETRIA_AGENT_ID=%s %s", agent_id, claude_cmd)
-
-	-- Wrap in tmux to fix terminal rendering (DEC mode 2026 synchronized output).
-	-- tmux buffers sync blocks and renders them atomically, preventing the content
-	-- duplication caused by Neovim's libvterm not supporting mode 2026.
-	-- Uses a dedicated server socket so it never interferes with the user's tmux.
-	-- NOTE: on_exit receives tmux's exit code (always 0 on clean session end), not
-	-- Claude's. Abnormal Claude exits will not trigger the exit code warning below.
-	local use_tmux = terminal_config.use_tmux == true and vim.fn.executable("tmux") == 1
-	local cmd
-	if use_tmux then
-		local session = string.format("claude_%d", buf)
-		-- Guard: verify the bundled tmux.conf exists before using it
-		if not vim.uv.fs_stat(tmux_conf_path) then
-			vim.notify(
-				string.format("orchestrator.nvim: tmux.conf not found at %s — falling back to direct spawn", tmux_conf_path),
-				vim.log.levels.WARN
-			)
-			cmd = claude_cmd
-		else
-			-- Kill any stale session with the same name first (buffer IDs get reused).
-			-- Done via vim.fn.system so the kill side-effect is separate from the spawn command.
-			vim.fn.system(string.format("tmux -L %s kill-session -t %s 2>/dev/null", config.tmux_socket, session))
-			cmd = string.format(
-				"tmux -L %s -f %s new-session -s %s %s",
-				config.tmux_socket,
-				tmux_conf_path,
-				session,
-				vim.fn.shellescape(claude_cmd)
-			)
-		end
-	else
-		cmd = claude_cmd
-	end
+	cmd = string.format("env SYMMETRIA_AGENT_ID=%s %s", agent_id, cmd)
 
 	-- Spawn terminal with Claude command
 	local job_id = vim.fn.termopen(cmd, {
