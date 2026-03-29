@@ -25,11 +25,6 @@ local jump_to_plan_fn = nil
 ---@type table
 local terminal_config = {}
 
--- Configuration constants
-local config = {
-	valid_spawn_types = { "fresh", "resume", "continue" },
-}
-
 --- Set the instances module reference (called from init.lua)
 --- @param inst table The instances module
 function M.set_instances(inst)
@@ -160,12 +155,7 @@ M.spawn_order = { "fresh", "resume", "continue" }
 --- @param spawn_type string The spawn type to validate
 --- @return boolean is_valid True if spawn_type is valid
 function M.is_valid_spawn_type(spawn_type)
-	for _, valid in ipairs(config.valid_spawn_types) do
-		if spawn_type == valid then
-			return true
-		end
-	end
-	return false
+	return M.spawn_types[spawn_type] ~= nil
 end
 
 --- Spawn a new Claude terminal
@@ -198,16 +188,6 @@ function M.spawn(spawn_type, opts)
 		return nil
 	end
 
-	-- Build command from parts: claude [--dangerously-skip-permissions] [action-flags]
-	local cmd_parts = { "claude" }
-	if opts.dangerous then
-		table.insert(cmd_parts, "--dangerously-skip-permissions")
-	end
-	for _, flag in ipairs(cmd_config.flags) do
-		table.insert(cmd_parts, flag)
-	end
-	local cmd = table.concat(cmd_parts, " ")
-
 	local cwd = vim.fn.getcwd()
 
 	-- Create a new buffer for the terminal (listed, not scratch)
@@ -216,9 +196,16 @@ function M.spawn(spawn_type, opts)
 	-- Switch to the buffer (full-screen style)
 	vim.api.nvim_set_current_buf(buf)
 
-	-- Inject agent ID for Symmetria activity tracking hooks
+	-- Build full command: env SYMMETRIA_AGENT_ID=<id> claude [--dangerously-skip-permissions] [action-flags]
 	local agent_id = string.format("%d_%d", vim.uv.getpid(), buf)
-	cmd = string.format("env SYMMETRIA_AGENT_ID=%s %s", agent_id, cmd)
+	local cmd_parts = { string.format("env SYMMETRIA_AGENT_ID=%s", agent_id), "claude" }
+	if opts.dangerous then
+		table.insert(cmd_parts, "--dangerously-skip-permissions")
+	end
+	for _, flag in ipairs(cmd_config.flags) do
+		table.insert(cmd_parts, flag)
+	end
+	local cmd = table.concat(cmd_parts, " ")
 
 	-- Spawn terminal with Claude command
 	local job_id = vim.fn.termopen(cmd, {
