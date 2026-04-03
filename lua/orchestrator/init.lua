@@ -479,17 +479,18 @@ function M.stt_inject(filepath, submit, target_buf)
 	local submitted = false
 
 	if submit then
-		-- Event-driven submit: attach on_lines listener to terminal buffer,
-		-- wait for it to fire (confirms buffer was updated after chan_send).
+		-- Two-phase submit: send \r in a separate chan_send call so it
+		-- arrives as a distinct write() syscall. Ink reads each write()
+		-- as a standalone stdin chunk — separating text from \r ensures
+		-- the Enter is processed as a keypress (submit), not as part of
+		-- a paste (literal newline insertion).
 		--
-		-- Terminal buffers are purely libvterm-driven (no statusline,
-		-- signcolumn, or decoration noise), so any on_lines event after
-		-- chan_send reflects real PTY output — we trust it directly.
-		--
-		-- Sending \r in a separate event loop iteration guarantees a separate
-		-- write() syscall, which Ink sees as a standalone stdin.read() chunk.
-		-- This ensures \r is processed as a keypress (submit), not as part
-		-- of a paste (literal newline insertion).
+		-- Fast path: use on_lines to detect when the terminal buffer has
+		-- updated (PTY echoed the text), then send \r immediately.
+		-- Fallback: if on_lines doesn't fire within 200ms (e.g. terminal
+		-- is in normal mode where Neovim freezes buffer updates), send \r
+		-- anyway — vim.wait() already ensured enough event loop iterations
+		-- for the two write() syscalls to be separate.
 		local text_confirmed = false
 		local on_lines_count = 0
 		local attach_ok = pcall(vim.api.nvim_buf_attach, target.buf, false, {
@@ -503,29 +504,31 @@ function M.stt_inject(filepath, submit, target_buf)
 		_stt_log(string.format("buf_attach | ok=%s buf=%d",
 			tostring(attach_ok), target.buf))
 
+		-- Wait for on_lines (fast path) or timeout (normal-mode fallback).
+		-- 200ms is generous for PTY echo but keeps latency low when
+		-- on_lines can't fire (terminal-normal mode freezes buffer).
+		local wait_start = vim.uv.hrtime()
 		if attach_ok then
-			-- vim.wait spins the event loop, processing on_lines callbacks and
-			-- terminal refresh timers. 1500ms leaves headroom before the bash
-			-- script's external timeout kills the process.
-			local wait_start = vim.uv.hrtime()
-			vim.wait(1500, function() return text_confirmed end, 50)
-			local wait_ms = (vim.uv.hrtime() - wait_start) / 1e6
-
-			_stt_log(string.format("vim.wait done | confirmed=%s waitMs=%.1f onLinesCount=%d",
-				tostring(text_confirmed), wait_ms, on_lines_count))
-
-			if text_confirmed then
-				local enter_ok, enter_err = pcall(vim.api.nvim_chan_send, target.job_id, "\r")
-				_stt_log(string.format("Enter sent | ok=%s err=%s",
-					tostring(enter_ok), tostring(enter_err)))
-				if enter_ok then
-					submitted = true
-				end
-			else
-				_stt_log("TIMEOUT — on_lines never fired, Enter skipped")
-			end
+			vim.wait(200, function() return text_confirmed end, 10)
 		else
-			_stt_log("buf_attach FAILED — Enter skipped")
+			-- buf_attach failed — still send Enter after a brief yield
+			-- to guarantee separate write() syscall.
+			vim.wait(50, function() return false end, 10)
+		end
+		local wait_ms = (vim.uv.hrtime() - wait_start) / 1e6
+
+		_stt_log(string.format("vim.wait done | confirmed=%s waitMs=%.1f onLinesCount=%d attachOk=%s",
+			tostring(text_confirmed), wait_ms, on_lines_count, tostring(attach_ok)))
+
+		if not text_confirmed then
+			_stt_log("on_lines did not fire (terminal likely in normal mode) — sending Enter anyway")
+		end
+
+		local enter_ok, enter_err = pcall(vim.api.nvim_chan_send, target.job_id, "\r")
+		_stt_log(string.format("Enter sent | ok=%s err=%s",
+			tostring(enter_ok), tostring(enter_err)))
+		if enter_ok then
+			submitted = true
 		end
 	end
 
