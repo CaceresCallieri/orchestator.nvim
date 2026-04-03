@@ -373,16 +373,25 @@ local function parse_operation_line(line)
 end
 
 --- Parse summary line for added/removed counts
+--- Handles both Edit format ("Added N lines, removed M lines")
+--- and Write format ("Wrote N lines to filepath")
 --- @param line string The cleaned line to parse
 --- @return number|nil added Lines added count
 --- @return number|nil removed Lines removed count
 local function parse_summary_line(line)
-	-- Match: "Added N lines, removed M lines" or variants
+	-- Match Edit format: "Added N lines, removed M lines" or variants
 	-- Handle singular "line" and plural "lines"
 	local added, removed = line:match("Added%s+(%d+)%s+lines?,%s+removed%s+(%d+)%s+lines?")
 	if added and removed then
 		return tonumber(added), tonumber(removed)
 	end
+
+	-- Match Write format: "Wrote N lines to filepath"
+	local written = line:match("Wrote%s+(%d+)%s+lines?%s+to%s+")
+	if written then
+		return tonumber(written), 0
+	end
+
 	return nil, nil
 end
 
@@ -390,12 +399,20 @@ end
 --- @param line string The cleaned line to parse
 --- @return number|nil line_number The line number from the diff
 local function parse_diff_line(line)
-	-- Match: leading whitespace, line number, whitespace, +/- indicator
+	-- Match Edit format: leading whitespace, line number, whitespace, +/- indicator
 	-- Examples: "  260 +  return build_winbar_string()" or "  263 -old code"
 	local line_num = line:match("^%s*(%d+)%s+[%+%-]")
 	if line_num then
 		return tonumber(line_num)
 	end
+
+	-- Match Write format: 4+ leading spaces, line number, space, content
+	-- Examples: "       1 ---" or "      10 has-jc: true"
+	line_num = line:match("^%s%s%s%s+(%d+)%s")
+	if line_num then
+		return tonumber(line_num)
+	end
+
 	return nil
 end
 
@@ -429,6 +446,21 @@ local function parse_diff_line_full(line)
 		return {
 			line_num = tonumber(line_num),
 			indicator = " ", -- context line indicator
+			prefix_len = prefix_len,
+		}
+	end
+
+	-- Third try: Write-style content lines (line number + single space + content)
+	-- Write output format: "       1 ---" or "      10 has-jc: true"
+	-- Requires 4+ leading spaces to avoid false positives on regular text
+	leading_ws, line_num = line:match("^(%s%s%s%s+)(%d+)%s")
+
+	if leading_ws and line_num then
+		-- Prefix = leading whitespace + line number + 1 space
+		local prefix_len = #leading_ws + #line_num + 1
+		return {
+			line_num = tonumber(line_num),
+			indicator = "+", -- Write content is always an addition
 			prefix_len = prefix_len,
 		}
 	end
