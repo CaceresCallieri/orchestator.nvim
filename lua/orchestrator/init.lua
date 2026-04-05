@@ -43,6 +43,7 @@ local default_config = {
 			jump_to_diff = "gd", -- Jump to source file from diff line
 			jump_to_prompt = "gp", -- Jump to last user prompt
 			jump_to_plan = "gP", -- Jump to last plan
+			open_url = "gx", -- Open URL under cursor
 		},
 	},
 	-- Dangerous mode configuration (--dangerously-skip-permissions)
@@ -66,6 +67,7 @@ local editor = require("orchestrator.editor")
 local terminal = require("orchestrator.terminal")
 local spawn_menu = require("orchestrator.spawn_menu")
 local edit_tracker = require("orchestrator.edit_tracker")
+local url_handler = require("orchestrator.url_handler")
 local bridge = require("orchestrator.bridge")
 
 -- Create autocmd group
@@ -336,6 +338,17 @@ end
 --- @return boolean success True if jump was successful
 function M.jump_to_last_plan(count)
 	return edit_tracker.jump_to_last_plan(count)
+end
+
+-- ============================================================
+-- PUBLIC API: URL Handler Functions
+-- ============================================================
+
+--- Open the URL nearest to the cursor on the current line
+--- Only works when cursor is in a Claude terminal buffer in normal mode
+--- @return boolean success True if a URL was opened
+function M.open_url_at_cursor()
+	return url_handler.open_url_at_cursor()
 end
 
 -- ============================================================
@@ -858,6 +871,12 @@ local function setup_user_commands()
 		nargs = "?",
 	})
 
+	vim.api.nvim_create_user_command("AgentsOpenUrl", function()
+		M.open_url_at_cursor()
+	end, {
+		desc = "Open URL under cursor in Claude terminal",
+	})
+
 	vim.api.nvim_create_user_command("OrchestratorDebug", function()
 		local all = instances.get_all()
 		local project = instances.get_for_current_project()
@@ -950,6 +969,9 @@ local function setup_plug_mappings()
 	vim.keymap.set("n", "<Plug>(OrchestratorJumpToPlan)", M.jump_to_last_plan, {
 		desc = "Jump to last plan in terminal",
 	})
+	vim.keymap.set("n", "<Plug>(OrchestratorOpenUrl)", M.open_url_at_cursor, {
+		desc = "Open URL under cursor in terminal",
+	})
 end
 
 -- ============================================================
@@ -1031,6 +1053,8 @@ function M.setup(opts)
 	terminal.set_jump_to_diff_fn(edit_tracker.jump_to_diff_location)
 	terminal.set_jump_to_prompt_fn(edit_tracker.jump_to_last_prompt)
 	terminal.set_jump_to_plan_fn(edit_tracker.jump_to_last_plan)
+	terminal.set_open_url_fn(url_handler.open_url_at_cursor)
+	url_handler.set_instances(instances)
 	picker.set_terminal(terminal)
 	editor.set_send_function(M.send_to_terminal)
 	editor.set_config(config)
@@ -1072,6 +1096,7 @@ local user_commands = {
 	"AgentsDiffJump",
 	"AgentsPromptJump",
 	"AgentsPlanJump",
+	"AgentsOpenUrl",
 	"OrchestratorDebug",
 	"OrchestratorReload",
 }
@@ -1151,6 +1176,7 @@ function M.reload()
 		"orchestrator.terminal",
 		"orchestrator.spawn_menu",
 		"orchestrator.edit_tracker",
+		"orchestrator.url_handler",
 		"orchestrator.bridge",
 	}
 	for _, mod in ipairs(modules) do

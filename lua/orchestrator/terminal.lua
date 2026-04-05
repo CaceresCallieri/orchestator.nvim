@@ -21,6 +21,10 @@ local jump_to_prompt_fn = nil
 ---@type function|nil
 local jump_to_plan_fn = nil
 
+-- Forward declaration for open_url function (set via setter from init.lua)
+---@type function|nil
+local open_url_fn = nil
+
 -- Plugin configuration (set via setter from init.lua)
 ---@type table
 local terminal_config = {}
@@ -53,6 +57,12 @@ end
 --- @param fn function The jump_to_last_plan function from edit_tracker
 function M.set_jump_to_plan_fn(fn)
 	jump_to_plan_fn = fn
+end
+
+--- Set the open_url function (called from init.lua to break circular dep)
+--- @param fn function The open_url_at_cursor function from url_handler
+function M.set_open_url_fn(fn)
+	open_url_fn = fn
 end
 
 --- Set up buffer-local keybindings for Claude terminal
@@ -111,6 +121,18 @@ local function setup_terminal_keybindings(buf, kill_fn)
 			noremap = true,
 			silent = true,
 			desc = "Jump to last plan",
+		})
+	end
+
+	-- Open URL under cursor (normal mode only)
+	if km.open_url and km.open_url ~= false and open_url_fn then
+		vim.keymap.set("n", km.open_url, function()
+			open_url_fn()
+		end, {
+			buffer = buf,
+			noremap = true,
+			silent = true,
+			desc = "Open URL under cursor",
 		})
 	end
 end
