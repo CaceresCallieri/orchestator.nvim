@@ -21,9 +21,9 @@ local jump_to_prompt_fn = nil
 ---@type function|nil
 local jump_to_plan_fn = nil
 
--- Forward declaration for open_url function (set via setter from init.lua)
+-- Forward declaration for copy_url function (set via setter from init.lua)
 ---@type function|nil
-local open_url_fn = nil
+local copy_url_fn = nil
 
 -- Plugin configuration (set via setter from init.lua)
 ---@type table
@@ -59,10 +59,10 @@ function M.set_jump_to_plan_fn(fn)
 	jump_to_plan_fn = fn
 end
 
---- Set the open_url function (called from init.lua to break circular dep)
---- @param fn function The open_url_at_cursor function from url_handler
-function M.set_open_url_fn(fn)
-	open_url_fn = fn
+--- Set the copy_url function (called from init.lua to break circular dep)
+--- @param fn function The copy_url_at_cursor function from url_handler
+function M.set_copy_url_fn(fn)
+	copy_url_fn = fn
 end
 
 --- Set up buffer-local keybindings for Claude terminal
@@ -124,15 +124,15 @@ local function setup_terminal_keybindings(buf, kill_fn)
 		})
 	end
 
-	-- Open URL under cursor (normal mode only)
-	if km.open_url and km.open_url ~= false and open_url_fn then
-		vim.keymap.set("n", km.open_url, function()
-			open_url_fn()
+	-- Copy URL under cursor to clipboard (normal mode only)
+	if km.copy_url and km.copy_url ~= false and copy_url_fn then
+		vim.keymap.set("n", km.copy_url, function()
+			copy_url_fn()
 		end, {
 			buffer = buf,
 			noremap = true,
 			silent = true,
-			desc = "Open URL under cursor",
+			desc = "Copy URL under cursor to clipboard",
 		})
 	end
 end

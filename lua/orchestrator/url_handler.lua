@@ -1,5 +1,5 @@
 -- URL Handler Module
--- Detects and opens URLs from Claude terminal buffer lines
+-- Detects and copies URLs from Claude terminal buffer lines to the system clipboard
 -- Handles ANSI stripping, cursor proximity, and edge cases like
 -- balanced parentheses, markdown links, and trailing punctuation
 
@@ -52,7 +52,7 @@ end
 --- @return string Cleaned URL
 local function strip_trailing_punctuation(url)
 	-- Strip trailing chars that are almost never part of URLs
-	url = url:gsub("[%.%,%;%:%!%?]+$", "")
+	url = url:gsub("[%.%,%;%!%?]+$", "")
 
 	-- Handle balanced parentheses:
 	-- "https://en.wikipedia.org/wiki/Foo_(bar)" → keep balanced )
@@ -130,7 +130,9 @@ local function find_urls_in_line(line)
 			end
 		end
 
-		search_start = bracket_end + 1
+		-- Advance past the closing ) of the full markdown link span to avoid
+		-- re-entering the same link's URL body on the next iteration
+		search_start = url_end + 1
 	end
 
 	-- Pass 2: Bare http(s):// URLs not already captured by markdown
@@ -178,9 +180,6 @@ local function nearest_url(urls, cursor_col)
 	if #urls == 0 then
 		return nil
 	end
-	if #urls == 1 then
-		return urls[1]
-	end
 
 	local best = nil
 	local best_dist = math.huge
@@ -211,7 +210,7 @@ end
 --- Copy the URL nearest to the cursor on the current line to the system clipboard
 --- Only works in Claude terminal buffers in normal mode
 --- @return boolean success True if a URL was found and copied
-function M.open_url_at_cursor()
+function M.copy_url_at_cursor()
 	-- 1. Validate context (same pattern as edit_tracker:validate_jump_context)
 	if not instances then
 		vim.notify("URL handler not initialized", vim.log.levels.ERROR)

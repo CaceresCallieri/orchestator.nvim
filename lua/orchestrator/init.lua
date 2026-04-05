@@ -43,7 +43,7 @@ local default_config = {
 			jump_to_diff = "gd", -- Jump to source file from diff line
 			jump_to_prompt = "gp", -- Jump to last user prompt
 			jump_to_plan = "gP", -- Jump to last plan
-			open_url = "gx", -- Open URL under cursor
+			copy_url = "gx", -- Copy URL under cursor to clipboard
 		},
 	},
 	-- Dangerous mode configuration (--dangerously-skip-permissions)
@@ -344,11 +344,11 @@ end
 -- PUBLIC API: URL Handler Functions
 -- ============================================================
 
---- Open the URL nearest to the cursor on the current line
+--- Copy the URL nearest to the cursor on the current line to the system clipboard
 --- Only works when cursor is in a Claude terminal buffer in normal mode
---- @return boolean success True if a URL was opened
-function M.open_url_at_cursor()
-	return url_handler.open_url_at_cursor()
+--- @return boolean success True if a URL was found and copied
+function M.copy_url_at_cursor()
+	return url_handler.copy_url_at_cursor()
 end
 
 -- ============================================================
@@ -871,10 +871,10 @@ local function setup_user_commands()
 		nargs = "?",
 	})
 
-	vim.api.nvim_create_user_command("AgentsOpenUrl", function()
-		M.open_url_at_cursor()
+	vim.api.nvim_create_user_command("AgentsCopyUrl", function()
+		M.copy_url_at_cursor()
 	end, {
-		desc = "Open URL under cursor in Claude terminal",
+		desc = "Copy URL under cursor to clipboard (Claude terminal)",
 	})
 
 	vim.api.nvim_create_user_command("OrchestratorDebug", function()
@@ -969,8 +969,8 @@ local function setup_plug_mappings()
 	vim.keymap.set("n", "<Plug>(OrchestratorJumpToPlan)", M.jump_to_last_plan, {
 		desc = "Jump to last plan in terminal",
 	})
-	vim.keymap.set("n", "<Plug>(OrchestratorOpenUrl)", M.open_url_at_cursor, {
-		desc = "Open URL under cursor in terminal",
+	vim.keymap.set("n", "<Plug>(OrchestratorCopyUrl)", M.copy_url_at_cursor, {
+		desc = "Copy URL under cursor to clipboard",
 	})
 end
 
@@ -1053,7 +1053,7 @@ function M.setup(opts)
 	terminal.set_jump_to_diff_fn(edit_tracker.jump_to_diff_location)
 	terminal.set_jump_to_prompt_fn(edit_tracker.jump_to_last_prompt)
 	terminal.set_jump_to_plan_fn(edit_tracker.jump_to_last_plan)
-	terminal.set_open_url_fn(url_handler.open_url_at_cursor)
+	terminal.set_copy_url_fn(url_handler.copy_url_at_cursor)
 	url_handler.set_instances(instances)
 	picker.set_terminal(terminal)
 	editor.set_send_function(M.send_to_terminal)
@@ -1096,7 +1096,7 @@ local user_commands = {
 	"AgentsDiffJump",
 	"AgentsPromptJump",
 	"AgentsPlanJump",
-	"AgentsOpenUrl",
+	"AgentsCopyUrl",
 	"OrchestratorDebug",
 	"OrchestratorReload",
 }
