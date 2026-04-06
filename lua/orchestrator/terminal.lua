@@ -204,7 +204,7 @@ end
 --- Spawn a new Claude terminal
 --- Creates buffer, opens terminal with specified variant, registers instance
 --- @param spawn_type string|nil "fresh" | "resume" | "continue" (defaults to "fresh")
---- @param opts table|nil Options { dangerous = boolean, kill_fn = function }
+--- @param opts table|nil Options { dangerous = boolean, kill_fn = function, cwd = string }
 --- @return table|nil instance The created instance, or nil on failure
 function M.spawn(spawn_type, opts)
 	-- Fail fast if dependencies aren't wired up
@@ -231,7 +231,7 @@ function M.spawn(spawn_type, opts)
 		return nil
 	end
 
-	local cwd = vim.fn.getcwd()
+	local cwd = opts.cwd or vim.fn.getcwd()
 
 	-- Create a new buffer for the terminal (listed, not scratch)
 	local buf = vim.api.nvim_create_buf(true, false)

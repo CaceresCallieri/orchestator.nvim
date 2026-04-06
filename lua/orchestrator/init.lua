@@ -167,7 +167,7 @@ end
 
 --- Spawn a new Claude terminal
 --- @param spawn_type string|nil "fresh" (default), "resume", or "continue"
---- @param opts table|nil Options { dangerous = boolean }
+--- @param opts table|nil Options { dangerous = boolean, cwd = string }
 --- @return table|nil instance The spawned instance
 function M.spawn(spawn_type, opts)
 	opts = opts or {}
@@ -327,6 +327,7 @@ function M.refresh_current()
 	end
 
 	local was_dangerous = inst.dangerous
+	local was_cwd = inst.cwd
 	_refresh_in_progress = true
 
 	-- Kill the old instance (destroys corrupted libvterm buffer)
@@ -336,7 +337,7 @@ function M.refresh_current()
 	-- (let TermClose/unregister complete first)
 	vim.schedule(function()
 		_refresh_in_progress = false
-		M.spawn("continue", { dangerous = was_dangerous })
+		M.spawn("continue", { dangerous = was_dangerous, cwd = was_cwd })
 	end)
 end
 
@@ -352,7 +353,7 @@ function M.refresh_all()
 	-- Collect metadata before killing (kill mutates the instances list)
 	local to_refresh = {}
 	for _, inst in ipairs(all) do
-		table.insert(to_refresh, { dangerous = inst.dangerous })
+		table.insert(to_refresh, { dangerous = inst.dangerous, cwd = inst.cwd })
 	end
 
 	-- Kill all instances
@@ -367,7 +368,7 @@ function M.refresh_all()
 		if i > #list then
 			return
 		end
-		M.spawn("continue", { dangerous = list[i].dangerous })
+		M.spawn("continue", { dangerous = list[i].dangerous, cwd = list[i].cwd })
 		vim.schedule(function()
 			schedule_respawns(list, i + 1)
 		end)
