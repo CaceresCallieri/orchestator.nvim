@@ -69,7 +69,8 @@ function M.set_copy_url_fn(fn)
 	copy_url_fn = fn
 end
 
---- Set the refresh function (called from init.lua to break circular dep)
+--- Set the refresh function injected from init.lua
+--- (refresh_current calls M.spawn which lives in init.lua, so it can't be required directly)
 --- @param fn function The refresh_current function from init
 function M.set_refresh_fn(fn)
 	refresh_fn = fn
@@ -148,9 +149,7 @@ local function setup_terminal_keybindings(buf, kill_fn)
 
 	-- Refresh terminal rendering via kill+respawn (normal mode only)
 	if km.refresh and km.refresh ~= false and refresh_fn then
-		vim.keymap.set("n", km.refresh, function()
-			refresh_fn()
-		end, {
+		vim.keymap.set("n", km.refresh, refresh_fn, {
 			buffer = buf,
 			noremap = true,
 			silent = true,

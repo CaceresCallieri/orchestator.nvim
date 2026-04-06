@@ -298,13 +298,20 @@ function M.focus(num)
 end
 
 -- ============================================================
--- PUBLIC API: Terminal Refresh
+-- PUBLIC API: Instance Lifecycle (Refresh)
 -- ============================================================
 
 --- Refresh the current Claude terminal to fix rendering corruption
 --- Kills the instance and respawns with "continue" to get a fresh terminal
 --- buffer with clean libvterm state while preserving the conversation
+local _refresh_in_progress = false
 function M.refresh_current()
+	-- Guard against double-invocation during the async kill→spawn gap
+	if _refresh_in_progress then
+		vim.notify("Refresh already in progress", vim.log.levels.WARN)
+		return
+	end
+
 	-- Try current buffer first
 	local current_buf = vim.api.nvim_get_current_buf()
 	local inst = instances.get_by_buf(current_buf)
@@ -320,6 +327,7 @@ function M.refresh_current()
 	end
 
 	local was_dangerous = inst.dangerous
+	_refresh_in_progress = true
 
 	-- Kill the old instance (destroys corrupted libvterm buffer)
 	terminal.kill(inst)
@@ -327,6 +335,7 @@ function M.refresh_current()
 	-- Respawn with "continue" on next event loop tick
 	-- (let TermClose/unregister complete first)
 	vim.schedule(function()
+		_refresh_in_progress = false
 		M.spawn("continue", { dangerous = was_dangerous })
 	end)
 end
@@ -351,19 +360,21 @@ function M.refresh_all()
 		terminal.kill(inst)
 	end
 
-	-- Respawn each with "continue" sequentially
+	-- Respawn each with "continue" sequentially with a scheduler tick between each
 	-- Note: each "-c" continues the most recent conversation for its cwd,
 	-- so this works best with single-instance-per-project setups
-	local idx = 0
-	local function respawn_next()
-		idx = idx + 1
-		if idx > #to_refresh then
+	local function schedule_respawns(list, i)
+		if i > #list then
 			return
 		end
-		M.spawn("continue", { dangerous = to_refresh[idx].dangerous })
-		vim.schedule(respawn_next)
+		M.spawn("continue", { dangerous = list[i].dangerous })
+		vim.schedule(function()
+			schedule_respawns(list, i + 1)
+		end)
 	end
-	vim.schedule(respawn_next)
+	vim.schedule(function()
+		schedule_respawns(to_refresh, 1)
+	end)
 end
 
 -- ============================================================
@@ -1059,7 +1070,7 @@ local function setup_plug_mappings()
 		desc = "Refresh current Claude terminal rendering",
 	})
 	vim.keymap.set("n", "<Plug>(OrchestratorRefreshAll)", M.refresh_all, {
-		desc = "Refresh all Claude terminal rendering",
+		desc = "Refresh all Claude terminal instances (kill + continue)",
 	})
 end
 
