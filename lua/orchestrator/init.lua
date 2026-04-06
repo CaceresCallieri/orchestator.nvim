@@ -44,6 +44,7 @@ local default_config = {
 			jump_to_prompt = "gp", -- Jump to last user prompt
 			jump_to_plan = "gP", -- Jump to last plan
 			copy_url = "gx", -- Copy URL under cursor to clipboard
+			refresh = "gR", -- Refresh terminal rendering (fix visual corruption)
 		},
 	},
 	-- Dangerous mode configuration (--dangerously-skip-permissions)
@@ -294,6 +295,75 @@ function M.focus(num)
 	end
 
 	terminal.focus(project_instances[num])
+end
+
+-- ============================================================
+-- PUBLIC API: Terminal Refresh
+-- ============================================================
+
+--- Refresh the current Claude terminal to fix rendering corruption
+--- Kills the instance and respawns with "continue" to get a fresh terminal
+--- buffer with clean libvterm state while preserving the conversation
+function M.refresh_current()
+	-- Try current buffer first
+	local current_buf = vim.api.nvim_get_current_buf()
+	local inst = instances.get_by_buf(current_buf)
+
+	-- Fallback to last active
+	if not inst and state.state.last_active_buf then
+		inst = instances.get_by_buf(state.state.last_active_buf)
+	end
+
+	if not inst then
+		vim.notify("No Claude instance to refresh", vim.log.levels.WARN)
+		return
+	end
+
+	local was_dangerous = inst.dangerous
+
+	-- Kill the old instance (destroys corrupted libvterm buffer)
+	terminal.kill(inst)
+
+	-- Respawn with "continue" on next event loop tick
+	-- (let TermClose/unregister complete first)
+	vim.schedule(function()
+		M.spawn("continue", { dangerous = was_dangerous })
+	end)
+end
+
+--- Refresh all Claude terminal instances to fix rendering corruption
+--- Kills each instance and respawns with "continue"
+function M.refresh_all()
+	local all = instances.get_all()
+	if #all == 0 then
+		vim.notify("No Claude instances to refresh", vim.log.levels.WARN)
+		return
+	end
+
+	-- Collect metadata before killing (kill mutates the instances list)
+	local to_refresh = {}
+	for _, inst in ipairs(all) do
+		table.insert(to_refresh, { dangerous = inst.dangerous })
+	end
+
+	-- Kill all instances
+	for _, inst in ipairs(all) do
+		terminal.kill(inst)
+	end
+
+	-- Respawn each with "continue" sequentially
+	-- Note: each "-c" continues the most recent conversation for its cwd,
+	-- so this works best with single-instance-per-project setups
+	local idx = 0
+	local function respawn_next()
+		idx = idx + 1
+		if idx > #to_refresh then
+			return
+		end
+		M.spawn("continue", { dangerous = to_refresh[idx].dangerous })
+		vim.schedule(respawn_next)
+	end
+	vim.schedule(respawn_next)
 end
 
 -- ============================================================
@@ -877,6 +947,17 @@ local function setup_user_commands()
 		desc = "Copy URL under cursor to clipboard (Claude terminal)",
 	})
 
+	vim.api.nvim_create_user_command("AgentsRefresh", function(opts)
+		if opts.bang then
+			M.refresh_all()
+		else
+			M.refresh_current()
+		end
+	end, {
+		desc = "Refresh Claude terminal rendering (! for all instances)",
+		bang = true,
+	})
+
 	vim.api.nvim_create_user_command("OrchestratorDebug", function()
 		local all = instances.get_all()
 		local project = instances.get_for_current_project()
@@ -972,6 +1053,14 @@ local function setup_plug_mappings()
 	vim.keymap.set("n", "<Plug>(OrchestratorCopyUrl)", M.copy_url_at_cursor, {
 		desc = "Copy URL under cursor to clipboard",
 	})
+
+	-- Refresh actions
+	vim.keymap.set("n", "<Plug>(OrchestratorRefresh)", M.refresh_current, {
+		desc = "Refresh current Claude terminal rendering",
+	})
+	vim.keymap.set("n", "<Plug>(OrchestratorRefreshAll)", M.refresh_all, {
+		desc = "Refresh all Claude terminal rendering",
+	})
 end
 
 -- ============================================================
@@ -1054,6 +1143,7 @@ function M.setup(opts)
 	terminal.set_jump_to_prompt_fn(edit_tracker.jump_to_last_prompt)
 	terminal.set_jump_to_plan_fn(edit_tracker.jump_to_last_plan)
 	terminal.set_copy_url_fn(url_handler.copy_url_at_cursor)
+	terminal.set_refresh_fn(M.refresh_current)
 	url_handler.set_instances(instances)
 	picker.set_terminal(terminal)
 	editor.set_send_function(M.send_to_terminal)
@@ -1097,6 +1187,7 @@ local user_commands = {
 	"AgentsPromptJump",
 	"AgentsPlanJump",
 	"AgentsCopyUrl",
+	"AgentsRefresh",
 	"OrchestratorDebug",
 	"OrchestratorReload",
 }
