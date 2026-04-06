@@ -11,10 +11,11 @@ local M = {}
 
 local uv = vim.loop or vim.uv
 
--- Socket path: /run/user/$UID/symmetria-agents.sock
-local SOCKET_DIR = string.format("/run/user/%d", uv.getuid())
-local SOCKET_NAME = "symmetria-agents.sock"
-local SOCKET_PATH = SOCKET_DIR .. "/" .. SOCKET_NAME
+-- Socket path: /run/user/$UID/symmetria-agents.sock (overridable via SYMMETRIA_AGENT_SOCKET)
+local SOCKET_PATH = uv.os_getenv("SYMMETRIA_AGENT_SOCKET")
+	or string.format("/run/user/%d/symmetria-agents.sock", uv.getuid())
+local SOCKET_DIR = SOCKET_PATH:match("(.+)/[^/]+$") or string.format("/run/user/%d", uv.getuid())
+local SOCKET_NAME = SOCKET_PATH:match("[^/]+$") or "symmetria-agents.sock"
 
 -- Debug logging (set to true to enable diagnostic output in :messages)
 local DEBUG = false
